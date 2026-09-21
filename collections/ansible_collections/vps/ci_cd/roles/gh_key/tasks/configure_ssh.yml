@@ -1,0 +1,31 @@
+---
+# =============================================================================
+# Configure SSH for GitHub
+# =============================================================================
+
+- name: Ensure .ssh directory exists
+  ansible.builtin.file:
+    path: "~/.ssh"
+    state: directory
+    mode: "0700"
+  tags: [deploy, ci_cd, gh_key, gh_key_config, phase9]
+
+- name: Add GitHub SSH config
+  ansible.builtin.blockinfile:
+    path: "{{ gh_key_ssh_config_path }}"
+    create: true
+    mode: "0600"
+    marker: "# {mark} ANSIBLE MANAGED - GitHub Deploy Key"
+    block: |
+      Host {{ gh_key_ssh_host }}
+          HostName {{ gh_key_ssh_host }}
+          User {{ gh_key_ssh_user }}
+          IdentityFile {{ gh_key_path }}
+          StrictHostKeyChecking accept-new
+          IdentitiesOnly yes
+  tags: [deploy, ci_cd, gh_key, gh_key_config, phase9]
+
+- name: Display SSH config status
+  ansible.builtin.debug:
+    msg: "GitHub SSH config added to {{ gh_key_ssh_config_path }}"
+  tags: [deploy, ci_cd, gh_key, gh_key_config, phase9]

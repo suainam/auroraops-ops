@@ -1,0 +1,127 @@
+---
+# 启用控制变量: auroraops_roles['operations_loop']['backup'] (定义在 group_vars/all/roles.yml 和 host_vars/)
+# 默认: true (如需禁用，在 host_vars 中设置为 false)
+#
+# 复用 vps.applications.application_service 和 vps.applications.application_timer 模板
+
+- name: 角色启用检查
+  ansible.builtin.debug:
+    msg: "Role backup is disabled, skipping"
+  when: not (auroraops_roles['operations_loop']['backup'] | default(true) | bool)
+  tags: [deploy, backup, operations_loop, phase7]
+
+- name: 角色已启用，执行 Backup 任务
+  ansible.builtin.debug:
+    msg: "Executing backup role tasks"
+  when: auroraops_roles['operations_loop']['backup'] | default(true) | bool
+  tags: [deploy, backup, operations_loop, phase7]
+
+- name: Gather retired unified backup unit facts
+  ansible.builtin.service_facts:
+  when: backup_manage_retired_units | bool
+  tags: [deploy, backup, operations_loop, backup_retired, phase7]
+
+- name: Stop retired unified backup timer
+  become: true
+  ansible.builtin.systemd_service:
+    name: unified-backup.timer
+    enabled: false
+    state: stopped
+  when:
+    - backup_manage_retired_units | bool
+    - "'unified-backup.timer' in ansible_facts.services"
+  tags: [deploy, backup, operations_loop, backup_retired, phase7]
+
+- name: Refuse to retire a running unified backup service
+  ansible.builtin.assert:
+    that: >-
+      ansible_facts.services['unified-backup.service'].state
+      not in ['running', 'activating']
+    fail_msg: >-
+      unified-backup.service is active; wait for it to finish before retiring
+      its unit files.
+  when:
+    - backup_manage_retired_units | bool
+    - "'unified-backup.service' in ansible_facts.services"
+    - not ansible_check_mode
+  tags: [deploy, backup, operations_loop, backup_retired, phase7]
+
+- name: Disable inactive retired unified backup service
+  become: true
+  ansible.builtin.systemd_service:
+    name: unified-backup.service
+    enabled: false
+    state: stopped
+  when:
+    - backup_manage_retired_units | bool
+    - "'unified-backup.service' in ansible_facts.services"
+  tags: [deploy, backup, operations_loop, backup_retired, phase7]
+
+- name: Remove retired unified backup unit files
+  become: true
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ item }}"
+    state: absent
+  loop:
+    - unified-backup.timer
+    - unified-backup.service
+  when: backup_manage_retired_units | bool
+  notify: Reload systemd after retiring unified backup
+  tags: [deploy, backup, operations_loop, backup_retired, phase7]
+
+- name: 部署统一备份体系 (极致精简版)
+  when: auroraops_roles['operations_loop']['backup'] | default(true) | bool
+  tags: [deploy, backup, operations_loop, phase7]
+  block:
+    - name: 创建统一备份服务 (包含 Seeds, DB, System, Full)
+      ansible.builtin.include_role:
+        name: vps.applications.application_service
+      vars:
+        application_service_app_service_name: unified-backup
+        application_service_app_service_description: "Unified Backup Service (Python Version)"
+        application_service_app_service_exec_start: "{{ python_executor }} {{ lookup('env', 'HOME') }}/AuroraOps/scripts/manage_docker_data.py all"
+        application_service_app_service_user: root
+        application_service_app_service_group: root
+        application_service_app_service_type: oneshot
+        application_service_app_service_timeout: 1800
+        application_service_app_service_enabled: false
+        application_service_app_service_state: stopped
+        application_service_app_service_environment: >-
+          {{
+            {
+              'BACKUP_SOURCE_DOCKER_DIR': rustic_backup_source_docker_dir,
+              'BACKUP_DEST_DOCKER_DIR': backup_dest_docker_dir,
+              'BACKUP_DEST_SYSTEM_DIR': backup_dest_system_dir,
+              'BACKUP_CLOUD_REMOTES': rustic_backup_cloud_remotes | join(','),
+              'BACKUP_CLOUD_PREFIX': rustic_backup_cloud_prefix,
+              'BACKUP_MANIFEST': docker_backup_manifest | to_json | b64encode,
+              'BACKUP_SRC_PATHS': rustic_backup_src_paths | join(','),
+              'BACKUP_EXCLUDE_PATHS': backup_exclude_paths | default([]) | join(','),
+              'BACKUP_RETENTION_10MIN': rustic_backup_retention_10min,
+              'BACKUP_RETENTION_DAILY': rustic_backup_retention_daily,
+              'BACKUP_RETENTION_WEEKLY': rustic_backup_retention_weekly,
+              'BACKUP_RETENTION_MONTHLY': rustic_backup_retention_monthly,
+              'POSTGRESQL_DB_ADMIN_PASSWORD': rustic_postgresql_db_admin_password | default(''),
+              'REDIS_DB_ADMIN_PASSWORD': rustic_redis_db_admin_password | default(''),
+            } | combine(
+              {} if not (certbot_proxy_enabled | default(false)) else {
+                'http_proxy': certbot_proxy_http | default(''),
+                'https_proxy': certbot_proxy_https | default(''),
+                'HTTP_PROXY': certbot_proxy_http | default(''),
+                'HTTPS_PROXY': certbot_proxy_https | default(''),
+              }
+            )
+          }}
+      tags: [deploy, backup, operations_loop, phase7]
+
+    - name: 创建统一备份定时器 (启动后延迟执行)
+      ansible.builtin.include_role:
+        name: vps.applications.application_timer
+      vars:
+        application_timer_app_timer_name: unified-backup
+        application_timer_app_timer_description: "Unified Backup Timer"
+        application_timer_app_timer_on_calendar: "*-*-* *:0/10"
+        application_timer_app_timer_on_boot_sec: 10m
+        application_timer_app_timer_randomized_delay: 15m
+        application_timer_app_timer_persistent: true
+      tags: [deploy, backup, operations_loop, phase7]

@@ -1,0 +1,11 @@
+[Unit]
+Description=Rustic {{ rustic_backup_mode }} backup timer
+
+[Timer]
+Unit=rustic-backup-{{ rustic_backup_mode }}.service
+OnCalendar={{ rustic_backup_calendar }}
+Persistent=false
+RandomizedDelaySec={{ rustic_backup_randomized_delay }}
+
+[Install]
+WantedBy=timers.target

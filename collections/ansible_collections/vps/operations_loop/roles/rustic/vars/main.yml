@@ -1,0 +1,6 @@
+---
+# Rustic 变量配置
+# 注意: 使用 group_vars/all/Rustic.yml 中的 rustic_backup_instances 配置
+# 此文件保留用于兼容旧版本
+
+# 变量现在从 group_vars/all/Rustic.yml 读取

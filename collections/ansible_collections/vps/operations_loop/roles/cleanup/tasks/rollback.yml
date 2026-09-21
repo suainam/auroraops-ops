@@ -1,0 +1,35 @@
+---
+- name: "[Cleanup] Find previous prune script backups"
+  become: true
+  ansible.builtin.find:
+    paths: /usr/local/bin
+    patterns: "docker-prune.py.*~"
+    file_type: file
+  register: cleanup_docker_prune_script_backups
+  tags: [rollback, cleanup_system, cleanup, operations_loop, phase8]
+
+- name: "[Cleanup] Require a deploy-created prune script backup"
+  ansible.builtin.assert:
+    that:
+      - cleanup_docker_prune_script_backups.matched | int > 0
+    fail_msg: >-
+      No docker-prune.py backup exists. Refusing destructive fallback; no
+      containers, volumes, or application data were changed.
+  tags: [rollback, cleanup_system, cleanup, operations_loop, phase8]
+
+- name: "[Cleanup] Select newest prune script backup"
+  ansible.builtin.set_fact:
+    cleanup_docker_prune_script_backup: >-
+      {{ (cleanup_docker_prune_script_backups.files | sort(attribute='mtime') | last).path }}
+  tags: [rollback, cleanup_system, cleanup, operations_loop, phase8]
+
+- name: "[Cleanup] Restore previous prune script"
+  become: true
+  ansible.builtin.copy:
+    src: "{{ cleanup_docker_prune_script_backup }}"
+    dest: /usr/local/bin/docker-prune.py
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [rollback, cleanup_system, cleanup, operations_loop, phase8]

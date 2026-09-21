@@ -1,0 +1,17 @@
+---
+namespace: vps
+name: ci_cd
+version: 1.1.0
+readme: README.md
+authors:
+  - suai
+description: CI/CD automation roles collection
+license:
+  - MIT
+repository: https://github.com/suainam/AuroraOps
+tags:
+  - ansible
+  - linux
+  - tools
+  - cicd
+dependencies: {}

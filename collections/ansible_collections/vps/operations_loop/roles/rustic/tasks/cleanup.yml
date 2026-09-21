@@ -1,0 +1,29 @@
+---
+- name: 部署 Rustic 清理服务
+  tags: [deploy, operations_loop, rustic, rustic_cleanup, phase7]
+  block:
+    - name: 部署 Rustic 清理服务
+      become: true
+      ansible.builtin.template:
+        src: rustic-backup.service.j2
+        dest: /etc/systemd/system/rustic-cleanup.service
+        owner: root
+        group: root
+        mode: "0644"
+      vars:
+        rustic_backup_mode: cleanup
+        rustic_backup_service_timeout: "{{ rustic_cloud_service_timeout }}"
+        rustic_service_description: Rustic Repository Cleanup (shared run lock)
+      tags: [deploy, operations_loop, rustic, rustic_cleanup, phase7]
+
+    - name: 部署 Rustic 清理定时器
+      ansible.builtin.include_role:
+        name: vps.applications.application_timer
+      vars:
+        app_timer_name: rustic-cleanup
+        app_timer_description: "Rustic Cleanup Timer ({{ rustic_cleanup_timer_calendar | default('*-*-* *:30') }})"
+        app_timer_on_calendar: "{{ rustic_cleanup_timer_calendar | default('*-*-* *:30') }}"
+        app_timer_persistent: false
+        application_timer_app_timer_persistent: false
+        app_timer_randomized_delay: "0"
+      tags: [deploy, operations_loop, rustic, rustic_cleanup, phase7]

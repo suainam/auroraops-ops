@@ -1,0 +1,175 @@
+---
+- name: "[Audit] Verify unattended-upgrades package is installed"
+  ansible.builtin.package:
+    name: unattended-upgrades
+    state: present
+  check_mode: true
+  register: audit_unattended_upgrades_package
+  tags:
+    - verify
+    - audit_system
+    - audit
+    - operations_loop
+    - phase7
+- name: "[Audit] Assert unattended-upgrades package is installed"
+  ansible.builtin.assert:
+    that:
+      - audit_unattended_upgrades_package.changed == false
+    msg: unattended-upgrades package is not installed!
+  tags:
+    - verify
+    - audit_system
+    - audit
+    - operations_loop
+    - phase7
+- name: "[Audit] Verify apt-listchanges package is installed"
+  ansible.builtin.package:
+    name: apt-listchanges
+    state: present
+  check_mode: true
+  register: audit_apt_listchanges_package
+  tags:
+    - verify
+    - audit_system
+    - audit
+    - operations_loop
+    - phase7
+- name: "[Audit] Assert apt-listchanges package is installed"
+  ansible.builtin.assert:
+    that:
+      - audit_apt_listchanges_package.changed == false
+    msg: apt-listchanges package is not installed!
+  tags:
+    - verify
+    - audit_system
+    - audit
+    - operations_loop
+    - phase7
+- name: "[Audit] Verify 20auto-upgrades file exists"
+  ansible.builtin.stat:
+    path: /etc/apt/apt.conf.d/20auto-upgrades
+  register: audit_auto_upgrades_file
+  tags:
+    - verify
+    - audit_system
+    - audit
+    - operations_loop
+    - phase7
+- name: "[Audit] Assert 20auto-upgrades file exists"
+  ansible.builtin.assert:
+    that:
+      - audit_auto_upgrades_file.stat.exists is true
+    msg: /etc/apt/apt.conf.d/20auto-upgrades file does not exist!
+  tags:
+    - verify
+    - audit_system
+    - audit
+    - operations_loop
+    - phase7
+- name: "[Audit] Verify 50unattended-upgrades file exists"
+  ansible.builtin.stat:
+    path: /etc/apt/apt.conf.d/50unattended-upgrades
+  register: audit_unattended_upgrades_config_file
+  tags:
+    - verify
+    - audit_system
+    - audit
+    - operations_loop
+    - phase7
+- name: "[Audit] Assert 50unattended-upgrades file exists"
+  ansible.builtin.assert:
+    that:
+      - audit_unattended_upgrades_config_file.stat.exists is true
+    msg: /etc/apt/apt.conf.d/50unattended-upgrades file does not exist!
+  tags:
+    - verify
+    - audit_system
+    - audit
+    - operations_loop
+    - phase7
+- name: Verify Lynis is installed
+  become: true
+  ansible.builtin.stat:
+    path: "{{ audit_security_audit_lynis_dir }}/lynis"
+  register: audit_lynis_stat
+  tags:
+    - verify
+    - audit
+    - audit_security_audit
+    - operations_loop
+    - phase7
+- name: Display Lynis installation status
+  ansible.builtin.debug:
+    msg: "Lynis not installed, skipping Lynis security audit verification"
+  when: not audit_lynis_stat.stat.exists
+  tags:
+    - verify
+    - audit
+    - audit_security_audit
+    - operations_loop
+    - phase7
+- name: Verify security-audit service exists
+  become: true
+  ansible.builtin.stat:
+    path: /etc/systemd/system/security-audit.service
+  register: audit_service_stat
+  tags:
+    - verify
+    - audit
+    - audit_security_audit
+    - operations_loop
+    - phase7
+- name: Display service status
+  ansible.builtin.debug:
+    msg: "Security audit service not found"
+  when: not audit_service_stat.stat.exists
+  tags:
+    - verify
+    - audit
+    - audit_security_audit
+    - operations_loop
+    - phase7
+- name: Verify security-audit timer exists
+  become: true
+  ansible.builtin.stat:
+    path: /etc/systemd/system/security-audit.timer
+  register: audit_timer_stat
+  tags:
+    - verify
+    - audit
+    - audit_security_audit
+    - audit_timer_verify
+    - operations_loop
+    - phase7
+- name: Display timer status
+  ansible.builtin.debug:
+    msg: "Security audit timer not found"
+  when: not audit_timer_stat.stat.exists
+  tags:
+    - verify
+    - audit
+    - audit_security_audit
+    - audit_timer_verify
+    - operations_loop
+    - phase7
+- name: Verify audit log exists
+  become: true
+  ansible.builtin.stat:
+    path: "{{ audit_security_audit_log_dir }}/audit.log"
+  register: audit_log_stat
+  tags:
+    - verify
+    - audit
+    - audit_logging
+    - operations_loop
+    - phase7
+- name: Display audit log status
+  ansible.builtin.debug:
+    msg: "Audit log is empty or does not exist"
+  when: not audit_log_stat.stat.exists
+  tags:
+    - verify
+    - audit
+    - audit_logging
+    - operations_loop
+    - phase7

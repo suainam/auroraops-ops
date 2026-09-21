@@ -1,0 +1,21 @@
+---
+github_actions_watchdog_service_name: "github-actions-watchdog"
+github_actions_watchdog_script_path: "/usr/local/sbin/github_actions_watchdog.py"
+github_actions_watchdog_environment_file: "/etc/github-actions-watchdog.env"
+github_actions_watchdog_targets_file: "/etc/github-actions-watchdog-targets.json"
+github_actions_watchdog_timer_calendar: "*-*-01 04:00:00"
+github_actions_watchdog_randomized_delay: "6h"
+github_actions_watchdog_api_url: "https://api.github.com"
+github_actions_watchdog_targets:
+  - repository: "suainam/anyrouter-autolog"
+    workflow: "checkin.yml"
+    ref: "main"
+  - repository: "suainam/dailycheckin"
+    workflow: "daily-checkin.yml"
+    ref: "main"
+  - repository: "suainam/coze-daily-credit-action"
+    workflow: "coze-daily.yml"
+    ref: "main"
+github_actions_watchdog_notifier_path: "/usr/local/bin/notifier.py"
+github_actions_watchdog_notifier_python: "{{ health_checks_python_interpreter_path | default('/opt/aurora_venv/bin/python3') }}"
+github_actions_watchdog_notify_failure: true

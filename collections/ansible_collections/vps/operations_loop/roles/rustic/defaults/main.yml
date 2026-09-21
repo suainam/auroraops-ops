@@ -1,0 +1,82 @@
+---
+# Rustic Role - 默认变量
+# 变量从 group_vars/all/backup.yml 继承
+
+rustic_install_method: "apt"
+rustic_version: "latest"
+
+rustic_backup_timeout: 900
+rustic_local_service_timeout: 1800
+rustic_cloud_service_timeout: 7200
+rustic_lock_file: "/run/lock/rustic-backup.lock"
+rustic_forget_timeout_seconds: 900
+rustic_lock_timeout: 180
+rustic_log_dir: "/var/log/rustic"
+rustic_temp_dir: "/var/lib/rustic/.init_markers"
+rustic_cleanup_success_marker: "/var/lib/rustic/cleanup-success.json"
+rustic_rclone_config_path: "/root/.config/rclone/rclone.conf"
+
+# Optional role-local Logrotate configuration
+rustic_logrotate_enabled: true
+rustic_logrotate_config_path: "/etc/logrotate.d/rustic"
+rustic_logrotate_config:
+  log_path: "/var/log/rustic/*.log"
+  interval: daily
+  rotate_count: 7
+  compress: true
+  delaycompress: true
+  missingok: true
+  notifempty: true
+
+rustic_vault_rustic_password: "{{ vault_rustic_password | default('') }}"
+
+rustic_backup_base_dir: "{{ backup_base_dir | default('/opt/backups') }}"
+rustic_backup_source_docker_dir: "{{ backup_source_docker_dir | default('/opt/dockers') }}"
+rustic_backup_cloud_remotes: "{{ backup_cloud_remotes | default(['onedrive', 'gdrive']) }}"
+rustic_backup_cloud_prefix: "{{ backup_cloud_prefix | default('backup') }}"
+rustic_backup_exclude_file: "/etc/rustic/exclude.txt"
+
+rustic_backup_src_paths: "{{ backup_src_paths | default([]) }}"
+rustic_backup_src_paths_extra: "{{ backup_src_paths_extra | default([]) }}"
+
+rustic_backup_retention_10min: "{{ backup_retention_10min | default(3) }}"
+rustic_backup_retention_daily: "{{ backup_retention_daily | default(1) }}"
+rustic_backup_retention_weekly: "{{ backup_retention_weekly | default(1) }}"
+rustic_backup_retention_monthly: "{{ backup_retention_monthly | default(1) }}"
+rustic_backup_retention_yearly: "{{ backup_retention_yearly | default(1) }}"
+
+rustic_postgresql_db_admin_password: "{{ postgresql_db_admin_password | default('') }}"
+rustic_redis_db_admin_password: "{{ redis_db_admin_password | default('') }}"
+
+rustic_health_check_enabled: true
+rustic_manage_units: true
+rustic_check_interval: "weekly"
+
+# 定时器配置
+# 旧 combined timer 仅供 rollback 兼容。
+rustic_backup_timer_calendar: "*-*-* *:0/20"
+rustic_local_backup_timer_calendar: "hourly"
+rustic_cloud_backup_timer_calendar: "*-*-* 00/6:17"
+rustic_check_timer_calendar: "Sun *-*-* 04:30"
+# 清理：每小时1次（45分），与云端备份（00/6:17 + 15m 随机延迟窗口）彻底错开
+rustic_cleanup_timer_calendar: "*-*-* *:45"
+
+# Restore 恢复配置
+rustic_restore_mode: false
+rustic_restore_source: "onedrive"
+rustic_restore_target_dir: "/tmp/rustic_restore"
+rustic_restore_snapshot: ""
+rustic_restore_latest: true
+rustic_restore_databases: false
+rustic_restore_include: ""
+rustic_restore_exclude: ""
+
+# Restore 功能开关
+rustic_restore_docker_apps: false
+rustic_restore_docker_app: "" # 单应用恢复 (例: sillytavern)
+rustic_restore_system: false
+rustic_recovery_probe_mode: false
+rustic_observe_baseline_mode: false
+
+# Restore 操作类型
+rustic_restore_action: "" # list_snapshots, restore

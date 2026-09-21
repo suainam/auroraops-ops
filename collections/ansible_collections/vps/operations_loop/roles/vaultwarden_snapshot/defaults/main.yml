@@ -1,0 +1,16 @@
+---
+vaultwarden_snapshot_service_name: "vaultwarden-snapshot"
+vaultwarden_snapshot_script_path: "/usr/local/sbin/vaultwarden_snapshot.py"
+vaultwarden_snapshot_source_dir: "/opt/dockers/vaultwarden/data"
+vaultwarden_snapshot_root: "/opt/backups/vaultwarden-snapshots"
+vaultwarden_snapshot_container: "vaultwarden"
+vaultwarden_snapshot_health_url: "http://127.0.0.1:{{ app_port_vaultwarden_http | default(30007) }}/alive"
+vaultwarden_snapshot_retention: 12
+vaultwarden_snapshot_timer_calendar: "*-*-* *:0/10:00"
+vaultwarden_snapshot_max_age_seconds: 1800
+vaultwarden_snapshot_environment_file: "-/etc/health_checks/health_checks.env"
+vaultwarden_snapshot_notifier_path: "/usr/local/bin/notifier.py"
+vaultwarden_snapshot_notifier_python: "{{ health_checks_python_interpreter_path | default('/opt/aurora_venv/bin/python3') }}"
+vaultwarden_snapshot_notify_failure: true
+vaultwarden_snapshot_create_now: false
+vaultwarden_snapshot_rollback_remove_snapshots: false

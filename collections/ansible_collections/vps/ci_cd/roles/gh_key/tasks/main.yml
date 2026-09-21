@@ -1,0 +1,27 @@
+---
+# =============================================================================
+# Role: vps.ci_cd.gh_key - Main Tasks Entry Point
+# =============================================================================
+
+- name: Include detect tasks
+  ansible.builtin.import_tasks: detect.yml
+  tags: [deploy, ci_cd, gh_key, gh_key_detect, phase9]
+
+- name: Include generate_key tasks
+  ansible.builtin.import_tasks: generate_key.yml
+  when: not gh_key_connection_ok
+  tags: [deploy, ci_cd, gh_key, gh_key_install, phase9]
+
+- name: Include configure_ssh tasks
+  ansible.builtin.import_tasks: configure_ssh.yml
+  when: not gh_key_connection_ok
+  tags: [deploy, ci_cd, gh_key, gh_key_config, phase9]
+
+- name: Include add_to_github tasks
+  ansible.builtin.import_tasks: add_to_github.yml
+  when: not gh_key_connection_ok and gh_key_token is defined
+  tags: [deploy, ci_cd, gh_key, gh_key_api, phase9]
+
+- name: Include clone tasks
+  ansible.builtin.import_tasks: clone.yml
+  tags: [deploy, ci_cd, gh_key, gh_key_clone, phase9]

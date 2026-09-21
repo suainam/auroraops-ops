@@ -1,0 +1,58 @@
+---
+- name: Locate the deployed Rustic backup script
+  become: true
+  ansible.builtin.stat:
+    path: /usr/local/bin/rustic_backup.py
+  register: rustic_observed_script
+  changed_when: false
+  tags: [rustic_observe_baseline]
+
+- name: Observe deployed Rustic script capabilities
+  become: true
+  ansible.builtin.command: /usr/local/bin/rustic_backup.py capabilities
+  register: rustic_observed_capabilities
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  when: rustic_observed_script.stat.exists | default(false)
+  tags: [rustic_observe_baseline]
+
+- name: Observe Rustic unit states
+  become: true
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - show
+      - --property=LoadState,ActiveState,UnitFileState
+      - "{{ item }}"
+  loop:
+    - rustic-backup.timer
+    - rustic-backup-local.timer
+    - rustic-backup-cloud.timer
+    - rustic-check.timer
+    - rustic-backup-local.service
+    - rustic-backup-cloud.service
+  register: rustic_observed_units
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  tags: [rustic_observe_baseline]
+
+- name: Report safe Rustic deployment baseline
+  ansible.builtin.debug:
+    msg:
+      script_present: "{{ rustic_observed_script.stat.exists | default(false) }}"
+      split_capabilities_present: >-
+        {{
+          rustic_observed_capabilities.rc | default(1) == 0
+          and 'auroraops.rustic-capabilities/v1'
+              in (rustic_observed_capabilities.stdout | default(''))
+        }}
+      units: >-
+        {{
+          rustic_observed_units.results
+          | map(attribute='stdout_lines')
+          | list
+        }}
+  changed_when: false
+  tags: [rustic_observe_baseline]

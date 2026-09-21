@@ -1,0 +1,22 @@
+---
+- name: 检查 cf_probe 角色是否启用
+  ansible.builtin.assert:
+    that:
+      - cf_probe_server_id | length > 0
+    fail_msg: "cf_probe_server_id 必须在 host_vars 中指定"
+  when: cf_probe_enabled | default(false) | bool
+  tags: [deploy, observability, cf_probe, phase6]
+
+- name: 检测 cf_probe 服务管理器
+  become: true
+  ansible.builtin.stat:
+    path: /run/openrc
+  register: cf_probe_openrc_runtime
+  changed_when: false
+  when: cf_probe_enabled | default(false) | bool
+  tags: [deploy, verify, observability, cf_probe, phase6]
+
+- name: 部署 cf_probe 探针
+  ansible.builtin.import_tasks: deploy.yml
+  when: cf_probe_enabled | default(false) | bool
+  tags: [deploy, observability, cf_probe, phase6]

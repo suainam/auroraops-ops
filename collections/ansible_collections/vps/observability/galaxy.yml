@@ -1,0 +1,16 @@
+---
+namespace: vps
+name: observability
+version: 1.1.0
+readme: README.md
+authors:
+  - suai
+description: Observability and monitoring roles collection
+license:
+  - MIT
+repository: https://github.com/suainam/AuroraOps
+tags:
+  - ansible
+  - linux
+  - monitoring
+dependencies: {}

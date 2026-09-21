@@ -1,0 +1,121 @@
+---
+- name: Build Vaultwarden snapshot verification environment
+  ansible.builtin.set_fact:
+    vaultwarden_snapshot_verify_environment:
+      VAULTWARDEN_SNAPSHOT_SOURCE_DIR: "{{ vaultwarden_snapshot_source_dir }}"
+      VAULTWARDEN_SNAPSHOT_ROOT: "{{ vaultwarden_snapshot_root }}"
+      VAULTWARDEN_SNAPSHOT_CONTAINER: "{{ vaultwarden_snapshot_container }}"
+      VAULTWARDEN_SNAPSHOT_HEALTH_URL: "{{ vaultwarden_snapshot_health_url }}"
+      VAULTWARDEN_SNAPSHOT_RETENTION: "{{ vaultwarden_snapshot_retention | string }}"
+      VAULTWARDEN_SNAPSHOT_HOSTNAME: "{{ inventory_hostname }}"
+      VAULTWARDEN_SNAPSHOT_NOTIFY_FAILURE: "false"
+  tags: [verify, operations_loop, vaultwarden_snapshot, phase7]
+
+- name: Check Vaultwarden snapshot managed files
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ vaultwarden_snapshot_script_path }}"
+    - "/etc/systemd/system/{{ vaultwarden_snapshot_service_name }}.service"
+    - "/etc/systemd/system/{{ vaultwarden_snapshot_service_name }}.timer"
+    - "{{ vaultwarden_snapshot_root }}/latest.json"
+  register: vaultwarden_snapshot_managed_files
+  tags: [verify, operations_loop, vaultwarden_snapshot, phase7]
+
+- name: Assert Vaultwarden snapshot managed files exist
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+    fail_msg: "Vaultwarden snapshot managed file is missing: {{ item.item }}"
+  loop: "{{ vaultwarden_snapshot_managed_files.results }}"
+  tags: [verify, operations_loop, vaultwarden_snapshot, phase7]
+
+- name: Verify Vaultwarden snapshot timer is active
+  become: true
+  ansible.builtin.command:
+    argv: [systemctl, is-active, "{{ vaultwarden_snapshot_service_name }}.timer"]
+  changed_when: false
+  tags: [verify, operations_loop, vaultwarden_snapshot, phase7]
+
+- name: Verify Vaultwarden snapshot timer is enabled
+  become: true
+  ansible.builtin.command:
+    argv: [systemctl, is-enabled, "{{ vaultwarden_snapshot_service_name }}.timer"]
+  changed_when: false
+  tags: [verify, operations_loop, vaultwarden_snapshot, phase7]
+
+- name: Verify latest Vaultwarden snapshot contents
+  become: true
+  ansible.builtin.command:
+    argv:
+      - "{{ python_executor }}"
+      - "{{ vaultwarden_snapshot_script_path }}"
+      - verify
+      - latest
+  environment: "{{ vaultwarden_snapshot_verify_environment }}"
+  register: vaultwarden_snapshot_verify_result
+  changed_when: false
+  tags: [verify, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_verify, phase7]
+
+- name: Verify latest Vaultwarden snapshot can be restored
+  become: true
+  ansible.builtin.command:
+    argv:
+      - "{{ python_executor }}"
+      - "{{ vaultwarden_snapshot_script_path }}"
+      - restore-test
+      - latest
+  environment: "{{ vaultwarden_snapshot_verify_environment }}"
+  register: vaultwarden_snapshot_restore_test_result
+  changed_when: false
+  tags: [verify, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_restore_test, phase7]
+
+- name: Read current epoch for Vaultwarden snapshot age verification
+  ansible.builtin.command:
+    argv: [date, +%s]
+  register: vaultwarden_snapshot_current_epoch
+  changed_when: false
+  tags: [verify, operations_loop, vaultwarden_snapshot, phase7]
+
+- name: Check Vaultwarden snapshot age
+  ansible.builtin.assert:
+    that:
+      - >-
+        (vaultwarden_snapshot_current_epoch.stdout | int)
+        - (vaultwarden_snapshot_managed_files.results[3].stat.mtime | int)
+        <= (vaultwarden_snapshot_max_age_seconds | int)
+    fail_msg: "Latest Vaultwarden snapshot is older than {{ vaultwarden_snapshot_max_age_seconds }} seconds"
+  tags: [verify, operations_loop, vaultwarden_snapshot, phase7]
+
+- name: Verify Vaultwarden remains available
+  ansible.builtin.uri:
+    url: "{{ vaultwarden_snapshot_health_url }}"
+    method: GET
+    status_code: 200
+    return_content: true
+  register: vaultwarden_snapshot_alive_result
+  failed_when: >-
+    vaultwarden_snapshot_alive_result.status != 200
+    or vaultwarden_snapshot_alive_result.content | length == 0
+  tags: [verify, operations_loop, vaultwarden_snapshot, phase7]
+
+- name: Check for incomplete Vaultwarden snapshot staging directories
+  become: true
+  ansible.builtin.find:
+    paths: "{{ vaultwarden_snapshot_root }}"
+    file_type: directory
+    patterns: ".staging-*"
+    hidden: true
+    recurse: false
+  register: vaultwarden_snapshot_staging_dirs
+  tags: [verify, operations_loop, vaultwarden_snapshot, phase7]
+
+- name: Assert Vaultwarden snapshot workspace is clean
+  ansible.builtin.assert:
+    that:
+      - vaultwarden_snapshot_staging_dirs.matched == 0
+      - (vaultwarden_snapshot_verify_result.stdout | from_json).sqlite_quick_check == 'ok'
+      - (vaultwarden_snapshot_restore_test_result.stdout | from_json).sqlite_quick_check == 'ok'
+    fail_msg: "Vaultwarden snapshot workspace or validation result is not clean"
+  tags: [verify, operations_loop, vaultwarden_snapshot, phase7]

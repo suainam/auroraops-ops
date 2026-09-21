@@ -1,0 +1,11 @@
+---
+- name: Report disabled GitHub Actions watchdog role
+  ansible.builtin.debug:
+    msg: "Role github_actions_watchdog is disabled, skipping"
+  when: not (auroraops_roles['operations_loop']['github_actions_watchdog'] | default(false) | bool)
+  tags: [deploy, operations_loop, github_actions_watchdog, phase7]
+
+- name: Apply GitHub Actions watchdog lifecycle
+  ansible.builtin.import_tasks: apply.yml
+  when: auroraops_roles['operations_loop']['github_actions_watchdog'] | default(false) | bool
+  tags: [deploy, operations_loop, github_actions_watchdog, phase7]

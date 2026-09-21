@@ -1,0 +1,8 @@
+---
+- name: 清理本地暂存目录
+  ansible.builtin.file:
+    path: "{{ homer_portal_staging_dir }}"
+    state: absent
+  delegate_to: localhost
+  run_once: true
+  tags: [rollback, rollback_verify, observability, homer_portal, phase6]

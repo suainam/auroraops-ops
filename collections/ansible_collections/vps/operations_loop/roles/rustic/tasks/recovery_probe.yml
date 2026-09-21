@@ -1,0 +1,43 @@
+---
+- name: Restore one Rustic file into an ephemeral verification target
+  become: true
+  no_log: true
+  ansible.builtin.shell: |
+    set -a
+    . /etc/rustic/backup.env
+    set +a
+    /usr/local/bin/rustic_backup.py restore-probe
+  args:
+    executable: /bin/bash
+  register: rustic_recovery_probe_result
+  changed_when: false
+  tags: [rustic_recovery_probe]
+
+- name: Parse Rustic recovery probe evidence
+  no_log: true
+  ansible.builtin.set_fact:
+    rustic_recovery_probe_evidence: "{{ rustic_recovery_probe_result.stdout | from_json }}"
+  changed_when: false
+  tags: [rustic_recovery_probe]
+
+- name: Assert Rustic recovery probe is identity-bound and non-empty
+  ansible.builtin.assert:
+    that:
+      - rustic_recovery_probe_evidence.repository_id | length > 0
+      - rustic_recovery_probe_evidence.snapshot_id | length > 0
+      - rustic_recovery_probe_evidence.path | length > 0
+      - rustic_recovery_probe_evidence.bytes | int > 0
+      - rustic_recovery_probe_evidence.sha256 | length == 64
+    fail_msg: Rustic recovery probe did not produce complete identity-bound evidence
+  tags: [rustic_recovery_probe]
+
+- name: Report safe Rustic recovery evidence
+  ansible.builtin.debug:
+    msg:
+      repository_id: "{{ rustic_recovery_probe_evidence.repository_id }}"
+      snapshot_id: "{{ rustic_recovery_probe_evidence.snapshot_id }}"
+      path: "{{ rustic_recovery_probe_evidence.path }}"
+      bytes: "{{ rustic_recovery_probe_evidence.bytes }}"
+      sha256: "{{ rustic_recovery_probe_evidence.sha256 }}"
+      production_state_unchanged: true
+  tags: [rustic_recovery_probe]

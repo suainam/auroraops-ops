@@ -1,0 +1,89 @@
+---
+- name: 检测 cf_probe 服务管理器
+  become: true
+  ansible.builtin.stat:
+    path: /run/openrc
+  register: cf_probe_openrc_runtime
+  changed_when: false
+  when: cf_probe_enabled | default(false) | bool
+  tags: [verify, observability, cf_probe, phase6]
+- name: 检查 cf_probe 二进制文件存在
+  become: true
+  ansible.builtin.stat:
+    path: "{{ cf_probe_install_dir }}/cf-probe"
+  register: cf_probe_binary
+  tags: [verify, observability, cf_probe, phase6]
+
+- name: 验证 cf_probe 配置文件存在
+  become: true
+  ansible.builtin.stat:
+    path: "{{ cf_probe_config_file }}"
+  register: cf_probe_config
+  tags: [verify, observability, cf_probe, phase6]
+
+- name: 验证 cf_probe systemd 服务已启用
+  become: true
+  ansible.builtin.systemd_service:
+    name: cf-probe.service
+    state: started
+    enabled: true
+    daemon_reload: true
+  when:
+    - cf_probe_enabled | default(false) | bool
+    - not cf_probe_openrc_runtime.stat.exists
+  tags: [verify, observability, cf_probe, phase6]
+
+- name: 验证 cf_probe OpenRC 服务已启用
+  become: true
+  ansible.builtin.command: rc-update show default
+  register: cf_probe_openrc_enabled
+  changed_when: false
+  when:
+    - cf_probe_enabled | default(false) | bool
+    - cf_probe_openrc_runtime.stat.exists
+  tags: [verify, observability, cf_probe, phase6]
+
+- name: 验证 cf_probe OpenRC 服务正在运行
+  become: true
+  ansible.builtin.command: rc-service cf-probe status
+  register: cf_probe_openrc_status
+  changed_when: false
+  when:
+    - cf_probe_enabled | default(false) | bool
+    - cf_probe_openrc_runtime.stat.exists
+  tags: [verify, observability, cf_probe, phase6]
+
+- name: 断言 cf_probe OpenRC 服务状态
+  ansible.builtin.assert:
+    that:
+      - cf_probe_openrc_enabled.rc == 0
+      - "'cf-probe' in cf_probe_openrc_enabled.stdout"
+      - cf_probe_openrc_status.rc == 0
+    fail_msg: "cf_probe OpenRC service is not running and enabled"
+  when:
+    - cf_probe_enabled | default(false) | bool
+    - cf_probe_openrc_runtime.stat.exists
+  tags: [verify, observability, cf_probe, phase6]
+
+- name: 检查 cf_probe 日志是否有运行记录
+  become: true
+  ansible.builtin.command:
+    argv: >-
+      {{
+        ['journalctl', '-u', 'cf-probe', '--no-pager', '--lines', '5']
+        if not cf_probe_openrc_runtime.stat.exists
+        else ['tail', '-n', '5', '/var/log/cf-probe.log']
+      }}
+  register: cf_probe_log
+  changed_when: false
+  failed_when: false
+  when: cf_probe_enabled | default(false) | bool
+  tags: [verify, observability, cf_probe, phase6]
+
+- name: 报告 cf_probe 运行状态
+  ansible.builtin.debug:
+    msg: |
+      cf_probe 二进制: {{ '存在' if cf_probe_binary.stat.exists else '不存在' }}
+      cf_probe 配置: {{ '存在' if cf_probe_config.stat.exists else '不存在' }}
+      cf_probe 服务状态: {{ cf_probe_log.stdout | default('未知') | truncate(200) }}
+  tags: [verify, observability, cf_probe, phase6]

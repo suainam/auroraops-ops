@@ -1,0 +1,162 @@
+---
+- name: 安装 Rustic
+  tags: [deploy, operations_loop, rustic, rustic_rustic_install, phase7]
+  block:
+    - name: 检查 Rustic 是否已安装
+      ansible.builtin.command:
+        argv:
+          - rustic
+          - --version
+      register: rustic_check
+      changed_when: false
+      failed_when: false
+      tags: [deploy, operations_loop, rustic, rustic_rustic_install, phase7]
+
+    - name: 获取当前 Rustic 版本
+      ansible.builtin.command:
+        argv:
+          - rustic
+          - --version
+      register: rustic_current_version
+      changed_when: false
+      failed_when: false
+      tags: [deploy, operations_loop, rustic, rustic_rustic_install, phase7]
+
+    - name: 安装 Rustic 依赖包
+      become: true
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - dirmngr
+          - curl
+        state: present
+        update_cache: true
+      when: rustic_check.rc != 0
+      tags: [deploy, operations_loop, rustic, rustic_rustic_install, phase7]
+
+    - name: 尝试通过 APT 安装 Rustic
+      when: rustic_check.rc != 0
+      tags: [deploy, operations_loop, rustic, rustic_rustic_install, phase7]
+      block:
+        - name: 添加 Rustic GPG 密钥 (APT 方式)
+          become: true
+          ansible.builtin.apt_key:
+            url: "https://packages.ericL.fr/pubkey.gpg"
+            state: present
+
+        - name: 添加 Rustic 官方仓库 (APT 方式)
+          become: true
+          ansible.builtin.apt_repository:
+            repo: "deb [arch=amd64] https://packages.ericL.fr/ {{ ansible_distribution_release | lower }} main"
+            state: present
+            update_cache: true
+
+        - name: 安装 Rustic (APT 方式)
+          become: true
+          ansible.builtin.apt:
+            name: rustic
+            state: present
+            update_cache: true
+      rescue:
+        - name: 记录 APT 安装失败并启用 GitHub 备选方案
+          ansible.builtin.debug:
+            msg: >-
+              Rustic APT installation failed; the verified GitHub release
+              fallback will be used.
+
+    - name: 检查 APT 安装结果
+      ansible.builtin.command:
+        argv:
+          - rustic
+          - --version
+      register: rustic_check_after_apt
+      changed_when: false
+      failed_when: false
+      tags: [deploy, operations_loop, rustic, rustic_rustic_install, phase7]
+
+    - name: 验证 GitHub 备选方案支持当前架构
+      ansible.builtin.assert:
+        that:
+          - ansible_architecture in rustic_release_arch_map
+        fail_msg: "Unsupported architecture for Rustic release: {{ ansible_architecture }}"
+      vars:
+        rustic_release_arch_map:
+          x86_64: x86_64-unknown-linux-musl
+          amd64: x86_64-unknown-linux-musl
+          aarch64: aarch64-unknown-linux-musl
+          arm64: aarch64-unknown-linux-musl
+      when: rustic_check_after_apt.rc != 0
+      tags: [deploy, operations_loop, rustic, rustic_rustic_install, phase7]
+
+    - name: 解析 Rustic GitHub 发布架构
+      ansible.builtin.set_fact:
+        rustic_release_arch: "{{ rustic_release_arch_map[ansible_architecture] }}"
+      vars:
+        rustic_release_arch_map:
+          x86_64: x86_64-unknown-linux-musl
+          amd64: x86_64-unknown-linux-musl
+          aarch64: aarch64-unknown-linux-musl
+          arm64: aarch64-unknown-linux-musl
+      when: rustic_check_after_apt.rc != 0
+      tags: [deploy, operations_loop, rustic, rustic_rustic_install, phase7]
+
+    - name: 下载 Rustic GitHub 发布包 (备选方案)
+      become: true
+      ansible.builtin.get_url:
+        url: "https://github.com/rustic-rs/rustic/releases/download/v0.11.0/rustic-v0.11.0-{{ rustic_release_arch }}.tar.gz"
+        dest: /tmp/rustic-v0.11.0.tar.gz
+        mode: "0644"
+      when:
+        - rustic_check_after_apt.rc != 0
+        - not ansible_check_mode
+      tags: [deploy, operations_loop, rustic, rustic_rustic_install, phase7]
+
+    - name: 解压 Rustic 二进制文件 (备选方案)
+      become: true
+      ansible.builtin.unarchive:
+        src: /tmp/rustic-v0.11.0.tar.gz
+        dest: /usr/local/bin
+        remote_src: true
+        include:
+          - rustic
+      when:
+        - rustic_check_after_apt.rc != 0
+        - not ansible_check_mode
+      tags: [deploy, operations_loop, rustic, rustic_rustic_install, phase7]
+
+    - name: 设置 Rustic 二进制执行权限
+      become: true
+      ansible.builtin.file:
+        path: /usr/local/bin/rustic
+        state: file
+        mode: "0755"
+      when:
+        - rustic_check_after_apt.rc != 0
+        - not ansible_check_mode
+      tags: [deploy, operations_loop, rustic, rustic_rustic_install, phase7]
+
+    - name: 清理 Rustic GitHub 发布包
+      become: true
+      ansible.builtin.file:
+        path: /tmp/rustic-v0.11.0.tar.gz
+        state: absent
+      when:
+        - rustic_check_after_apt.rc != 0
+        - not ansible_check_mode
+      tags: [deploy, operations_loop, rustic, rustic_rustic_install, phase7]
+
+    - name: 验证安装
+      ansible.builtin.command:
+        argv:
+          - rustic
+          - --version
+      register: rustic_version
+      changed_when: false
+      when: not ansible_check_mode or rustic_check.rc == 0
+      tags: [deploy, operations_loop, rustic, rustic_rustic_install, phase7]
+
+    - name: 打印 Rustic 版本
+      ansible.builtin.debug:
+        msg: "Rustic installed: {{ rustic_version.stdout }}"
+      when: rustic_version is defined and not (rustic_version.skipped | default(false) | bool)
+      tags: [deploy, operations_loop, rustic, rustic_rustic_install, phase7]

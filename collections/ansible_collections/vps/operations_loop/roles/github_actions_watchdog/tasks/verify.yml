@@ -1,0 +1,47 @@
+---
+- name: Check GitHub Actions watchdog managed files
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ github_actions_watchdog_script_path }}"
+    - "{{ github_actions_watchdog_environment_file }}"
+    - "{{ github_actions_watchdog_targets_file }}"
+    - "/etc/systemd/system/{{ github_actions_watchdog_service_name }}.service"
+    - "/etc/systemd/system/{{ github_actions_watchdog_service_name }}.timer"
+  register: github_actions_watchdog_managed_files
+  tags: [verify, operations_loop, github_actions_watchdog, phase7]
+
+- name: Assert GitHub Actions watchdog managed files exist
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.item != github_actions_watchdog_environment_file or item.stat.mode == '0600'
+    fail_msg: "GitHub Actions watchdog managed file is missing or insecure: {{ item.item }}"
+  loop: "{{ github_actions_watchdog_managed_files.results }}"
+  tags: [verify, operations_loop, github_actions_watchdog, phase7]
+
+- name: Verify GitHub Actions watchdog timer state
+  become: true
+  ansible.builtin.command:
+    argv: [systemctl, "{{ item }}", "{{ github_actions_watchdog_service_name }}.timer"]
+  loop: [is-active, is-enabled]
+  changed_when: false
+  tags: [verify, operations_loop, github_actions_watchdog, phase7]
+
+- name: Query GitHub Actions watchdog targets without mutation
+  become: true
+  ansible.builtin.command:
+    argv:
+      - "{{ python_executor }}"
+      - "{{ github_actions_watchdog_script_path }}"
+      - --dry-run
+  register: github_actions_watchdog_verify_result
+  changed_when: false
+  environment:
+    GITHUB_ACTIONS_WATCHDOG_TOKEN: "{{ github_auroraops_token }}"
+    GITHUB_ACTIONS_WATCHDOG_API_URL: "{{ github_actions_watchdog_api_url }}"
+    GITHUB_ACTIONS_WATCHDOG_TARGETS_FILE: "{{ github_actions_watchdog_targets_file }}"
+    GITHUB_ACTIONS_WATCHDOG_NOTIFY_FAILURE: "false"
+  no_log: true
+  tags: [verify, operations_loop, github_actions_watchdog, github_actions_watchdog_verify, phase7]

@@ -1,0 +1,46 @@
+---
+# Homer Dashboard Configuration
+title: "{{ homer_portal_title }}"
+subtitle: "{{ homer_portal_subtitle }}"
+logo: "{{ homer_portal_logo }}"
+
+header: true
+footer: '<p>Powered by <a href="https://github.com/bastienwirtz/homer">Homer</a> on <a href="https://pages.cloudflare.com/">Cloudflare Pages</a></p>'
+
+columns: "{{ homer_portal_columns }}"
+connectivityCheck: {{ homer_portal_connectivity_check | lower }}
+
+theme: default
+colors:
+  light:
+    highlight-primary: "#2563eb"
+    highlight-secondary: "#3b82f6"
+    highlight-hover: "#60a5fa"
+    background: "#f8fafc"
+    card-background: "#ffffff"
+    text: "#1e293b"
+    text-header: "#ffffff"
+    text-title: "#0f172a"
+    text-subtitle: "#475569"
+    card-shadow: rgba(0, 0, 0, 0.06)
+    link: "#2563eb"
+    link-hover: "#1d4ed8"
+  dark:
+    highlight-primary: "#3b82f6"
+    highlight-secondary: "#60a5fa"
+    highlight-hover: "#93c5fd"
+    background: "#0f172a"
+    card-background: "#1e293b"
+    text: "#e2e8f0"
+    text-header: "#ffffff"
+    text-title: "#f8fafc"
+    text-subtitle: "#94a3b8"
+    card-shadow: rgba(0, 0, 0, 0.3)
+    link: "#60a5fa"
+    link-hover: "#93c5fd"
+
+links:
+{{ homer_portal_links | to_nice_yaml(indent=2) | indent(2, first=false) }}
+
+services:
+{{ homer_portal_services | to_nice_yaml(indent=2) | indent(2, first=false) }}

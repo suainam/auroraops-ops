@@ -1,0 +1,17 @@
+---
+# handlers file for vps.system.systemd_priority
+
+- name: "[Systemd Priority] Reload systemd"
+  become: true
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: "[Systemd Priority] Restart priority services"
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: restarted
+  loop: "{{ systemd_priority_restart_service_names | default([]) }}"
+  when:
+    - systemd_priority_restart_service_names is defined
+    - systemd_priority_restart_service_names | length > 0

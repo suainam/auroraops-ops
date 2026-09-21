@@ -1,0 +1,77 @@
+---
+- name: 创建 cf_probe 配置目录
+  become: true
+  ansible.builtin.file:
+    path: "{{ cf_probe_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  tags: [deploy, observability, cf_probe, phase6]
+
+- name: 下载 cf_probe 二进制程序
+  become: true
+  ansible.builtin.get_url:
+    url: "{{ cf_probe_download_url }}"
+    dest: "{{ cf_probe_install_dir }}/cf-probe"
+    owner: root
+    group: root
+    mode: "0755"
+    timeout: 60
+  tags: [deploy, observability, cf_probe, phase6]
+
+- name: 部署 cf_probe 配置文件
+  become: true
+  ansible.builtin.template:
+    src: config.conf.j2
+    dest: "{{ cf_probe_config_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  tags: [deploy, observability, cf_probe, phase6]
+
+- name: 部署 cf_probe systemd 服务单元
+  become: true
+  ansible.builtin.template:
+    src: cf-probe.service.j2
+    dest: /etc/systemd/system/cf-probe.service
+    owner: root
+    group: root
+    mode: "0644"
+  when: not cf_probe_openrc_runtime.stat.exists
+  tags: [deploy, observability, cf_probe, phase6]
+
+- name: 启动并启用 cf_probe 服务
+  become: true
+  ansible.builtin.systemd_service:
+    name: cf-probe.service
+    state: restarted
+    enabled: true
+    daemon_reload: true
+  when:
+    - not ansible_check_mode
+    - not cf_probe_openrc_runtime.stat.exists
+  tags: [deploy, observability, cf_probe, phase6]
+
+- name: 部署 cf_probe OpenRC 服务脚本
+  become: true
+  ansible.builtin.template:
+    src: cf-probe.initd.j2
+    dest: /etc/init.d/cf-probe
+    owner: root
+    group: root
+    mode: "0755"
+  when: cf_probe_openrc_runtime.stat.exists
+  tags: [deploy, observability, cf_probe, phase6]
+
+- name: 启动并启用 cf_probe OpenRC 服务
+  become: true
+  ansible.builtin.service:
+    name: cf-probe
+    state: restarted
+    enabled: true
+  when:
+    - not ansible_check_mode
+    - cf_probe_openrc_runtime.stat.exists
+  tags: [deploy, observability, cf_probe, phase6]

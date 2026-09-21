@@ -1,0 +1,7 @@
+---
+galaxy_info:
+  author: AuroraOps
+  description: Homer Web Services Portal deployed to Cloudflare Pages
+  license: MIT
+  min_ansible_version: "2.14"
+dependencies: []

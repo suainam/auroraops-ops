@@ -1,0 +1,115 @@
+---
+- name: 移除 Lynis 源码目录
+  become: true
+  ansible.builtin.file:
+    path: "{{ audit_security_audit_lynis_dir }}"
+    state: absent
+  tags:
+    - rollback
+    - audit
+    - audit_security_audit
+    - operations_loop
+    - phase7
+- name: 移除审计报告目录
+  become: true
+  ansible.builtin.file:
+    path: "{{ audit_security_audit_report_dir }}"
+    state: absent
+  tags:
+    - rollback
+    - audit
+    - audit_security_audit
+    - operations_loop
+    - phase7
+- name: 移除审计脚本
+  become: true
+  ansible.builtin.file:
+    path: /usr/local/bin/run-security-audit.sh
+    state: absent
+  tags:
+    - rollback
+    - audit
+    - audit_security_audit
+    - operations_loop
+    - phase7
+- name: Gather security-audit service facts
+  ansible.builtin.service_facts:
+  tags:
+    - rollback
+    - audit
+    - audit_security_audit
+    - audit_timer_rollback
+    - operations_loop
+    - phase7
+
+- name: 停止并禁用 security-audit timer
+  become: true
+  ansible.builtin.systemd:
+    name: security-audit.timer
+    state: stopped
+    enabled: false
+  when: "'security-audit.timer' in ansible_facts.services"
+  tags:
+    - rollback
+    - audit
+    - audit_security_audit
+    - audit_timer_rollback
+    - operations_loop
+    - phase7
+
+- name: 停止并禁用 security-audit service
+  become: true
+  ansible.builtin.systemd:
+    name: security-audit.service
+    state: stopped
+    enabled: false
+  when: "'security-audit.service' in ansible_facts.services"
+  tags:
+    - rollback
+    - audit
+    - audit_security_audit
+    - audit_timer_rollback
+    - operations_loop
+    - phase7
+
+- name: 移除 security-audit systemd 文件
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/security-audit.service
+    - /etc/systemd/system/security-audit.timer
+  tags:
+    - rollback
+    - audit
+    - audit_security_audit
+    - audit_timer_rollback
+    - operations_loop
+    - phase7
+
+- name: 移除旧的 Cron 任务（兼容性清理）
+  become: true
+  ansible.builtin.cron:
+    name: Run Lynis security audit
+    state: absent
+  tags:
+    - rollback
+    - audit
+    - audit_security_audit
+    - audit_timer_rollback
+    - operations_loop
+    - phase7
+- name: "[Audit] Remove unattended-upgrades configurations"
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/apt.conf.d/20auto-upgrades
+    - /etc/apt/apt.conf.d/50unattended-upgrades
+  tags:
+    - rollback
+    - audit
+    - operations_loop
+    - phase7

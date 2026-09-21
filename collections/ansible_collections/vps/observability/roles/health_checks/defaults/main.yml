@@ -1,0 +1,148 @@
+---
+# health_checks_api_endpoint: "https://moe.saui.dpdns.org/api/push" # 基础URL，API Key将作为路径一部分
+health_checks_redis_host: "localhost"
+health_checks_redis_port: 6379
+# health_checks_redis_password: "" # 必须通过 vault.yml 提供
+
+# API Keys (必须通过 vault.yml 提供)
+# health_checks_notify1_api_key: ""
+# health_checks_notify2_api_key: ""
+
+# ===========================================
+# Health Checks 服务监控 - 分层变量
+# ===========================================
+# 变量优先级（从高到低）:
+#   1. host_vars/<host>.yml (主机特定)
+#   2. group_vars/all/health_checks.yml (全局默认)
+#   3. role/defaults/main.yml (技术默认)
+#
+# 使用规则:
+#   - health_checks_services_global: 所有主机都需要监控的服务
+#   - health_checks_services_host: 主机特定服务（在 host_vars 中定义）
+#   - health_checks_services_exclude: 主机排除的服务（在 host_vars 中定义）
+#   - 最终列表 = global + host - exclude
+# ===========================================
+
+# 新变量（分层）
+health_checks_services_global: []
+health_checks_services_host: []
+health_checks_services_exclude: []
+# 旧变量（保留兼容，已废弃）
+health_checks_services_to_monitor:
+  - ssh
+  - nginx
+  - docker
+  - redis
+  - rclone
+  - fail2ban
+  - cron
+  - networking
+  - postgresql@17-main
+
+# ===========================================
+# Health Checks 自愈服务 - 分层变量
+# ===========================================
+# 自愈服务列表使用相同的分层模式
+# ===========================================
+
+# 新变量（分层）
+health_checks_healing_services_global: []
+health_checks_healing_services_host: []
+health_checks_healing_services_exclude: []
+# 旧变量（保留兼容，已废弃）
+health_checks_self_healing_services:
+  - nginx
+  - docker
+  - redis
+  - rclone
+  - fail2ban
+  - cron
+  - postgresql@17-main
+
+health_checks_disk_warning_threshold: 90
+health_checks_disk_critical_threshold: 95
+
+health_checks_memory_warning_threshold: 90
+health_checks_memory_critical_threshold: 95
+
+health_checks_cpu_warning_threshold: 90
+health_checks_cpu_critical_threshold: 95
+health_checks_cpu_steal_threshold: 30
+
+# Optional role-local Logrotate configuration
+health_checks_logrotate_enabled: true
+health_checks_logrotate_config_path: "/etc/logrotate.d/health_checks"
+health_checks_logrotate_config:
+  log_path: "/var/log/health_checks/*.log"
+  interval: daily
+  rotate_count: 7
+  compress: true
+  delaycompress: true
+  missingok: true
+  notifempty: true
+
+health_checks_io_await_warning_threshold: 150
+health_checks_io_await_critical_threshold: 500
+
+health_checks_swap_warning_threshold: 70
+health_checks_swap_critical_threshold: 90
+
+# Rustic 备份新鲜度阈值（小时）
+# 本地默认每小时备份；云端默认每 6 小时备份，因此分别判定。
+health_checks_rustic_local_warning_age_hours: 2.5
+health_checks_rustic_local_critical_age_hours: 4
+health_checks_rustic_cloud_warning_age_hours: 8
+health_checks_rustic_cloud_critical_age_hours: 14
+health_checks_rustic_cleanup_warning_age_hours: 2.5
+health_checks_rustic_cleanup_critical_age_hours: 4
+
+# ===========================================
+# 运行环境配置
+# ===========================================
+# 优先使用全局统一解释器 (Canonical Venv: /opt/aurora_venv/bin/python3)
+# 如果全局未定义，则回退到系统 python3
+health_checks_python_interpreter_path: "{{ python_executor | default(ansible_python_interpreter) | default('/usr/bin/python3') }}"
+
+# 是否发送OK状态的心跳通知 (在智能拦截模式下，此变量主要控制是否允许发送心跳)
+health_checks_send_ok_heartbeats: true
+
+# 心跳发送间隔（分钟），默认为 360（即间隔 6 小时发送一次完整报告）
+health_checks_heartbeat_interval: 360
+
+# 告警时间窗口（工作时间）
+health_checks_alert_window_hours: "8-12,14-18"
+# 队列重试定时器 (Systemd OnCalendar 格式)，仅在工作时间段尝试重试
+health_checks_queue_on_calendar: "08..11,14..17:05:00"
+
+# 定时检查时间点（用于 Systemd Timer 的 OnCalendar）
+# 建议包含心跳时间点（如 06:05, 12:05, 18:05），以及中间的监控点
+# 格式支持 Systemd OnCalendar 语法: "06..20/2:05:00" (每2小时的05分)
+health_checks_schedule_hours: "06..20/2:05:00"
+
+# Systemd 服务变量
+health_checks_runner_description: "Health Check Runner"
+health_checks_runner_user: "root"
+health_checks_runner_group: "root" # 新增
+health_checks_runner_working_directory: "/var/lib/health_checks"
+health_checks_runner_exec_start: "/usr/local/bin/health_check_runner.py"
+health_checks_runner_exec_post: "/usr/local/bin/health_check_runner.py | {{ health_checks_python_interpreter_path }} /usr/local/bin/notifier.py"
+health_checks_runner_dependencies: []
+health_checks_runner_exec_stop: "" # 新增
+
+health_checks_notifier_description: "Health Check Notifier"
+health_checks_notifier_user: "root"
+health_checks_notifier_group: "root" # 新增
+health_checks_notifier_working_directory: "/var/lib/health_checks"
+health_checks_notifier_exec_start: "{{ health_checks_python_interpreter_path }} /usr/local/bin/notifier.py"
+health_checks_notifier_environment: []
+health_checks_notifier_exec_stop: "" # 新增
+health_checks_notifier_dependencies: ["health_check_runner.service"] # 新增
+
+health_checks_queue_processor_description: "Health Check Queue Processor"
+health_checks_queue_processor_user: "root"
+health_checks_queue_processor_group: "root" # 新增
+health_checks_queue_processor_working_directory: "/var/lib/health_checks"
+health_checks_queue_processor_exec_start: "{{ health_checks_python_interpreter_path }} /usr/local/bin/queue_processor.py"
+health_checks_queue_processor_environment: []
+health_checks_queue_processor_exec_stop: "" # 新增
+health_checks_queue_processor_dependencies: ["redis-server.service"] # 新增

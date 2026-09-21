@@ -1,0 +1,52 @@
+---
+# =============================================================================
+# Generate SSH Key for GitHub
+# =============================================================================
+
+- name: Ensure .ssh directory exists
+  ansible.builtin.file:
+    path: "~/.ssh"
+    state: directory
+    mode: "0700"
+  tags: [deploy, ci_cd, gh_key, gh_key_install, phase9]
+
+- name: Set SSH key comment
+  ansible.builtin.set_fact:
+    gh_key_comment_final: "{{ ansible_user_id }}@{{ ansible_hostname }}.{{ inventory_hostname }}"
+  tags: [deploy, ci_cd, gh_key, gh_key_install, phase9]
+
+- name: Generate ED25519 SSH key
+  ansible.builtin.command:
+    cmd: ssh-keygen -t {{ gh_key_type }} -C "{{ gh_key_comment_final }}" -f {{ gh_key_path }} -N ""
+  args:
+    creates: "{{ gh_key_path }}"
+  tags: [deploy, ci_cd, gh_key, gh_key_install, phase9]
+
+- name: Set private key permissions
+  ansible.builtin.file:
+    path: "{{ gh_key_path }}"
+    mode: "0600"
+  when: not ansible_check_mode
+  tags: [deploy, ci_cd, gh_key, gh_key_install, phase9]
+
+- name: Set public key permissions
+  ansible.builtin.file:
+    path: "{{ gh_key_public_key_path }}"
+    mode: "0644"
+  when: not ansible_check_mode
+  tags: [deploy, ci_cd, gh_key, gh_key_install, phase9]
+
+- name: Read public key content
+  ansible.builtin.slurp:
+    src: "{{ gh_key_public_key_path }}"
+  register: gh_key_public_key_content
+  when: not ansible_check_mode
+  tags: [deploy, ci_cd, gh_key, gh_key_install, phase9]
+
+- name: Display public key
+  ansible.builtin.debug:
+    msg:
+      - "SSH Public Key Generated:"
+      - "{{ gh_key_public_key_content['content'] | b64decode | trim }}"
+  when: not ansible_check_mode and gh_key_public_key_content is defined
+  tags: [deploy, ci_cd, gh_key, gh_key_install, phase9]

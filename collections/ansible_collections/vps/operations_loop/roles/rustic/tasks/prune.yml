@@ -1,0 +1,22 @@
+---
+- name: 清理 Rustic 快照
+  tags: [deploy, operations_loop, rustic, rustic_prune, phase7]
+  block:
+    - name: 执行 prune 清理
+      ansible.builtin.command: |
+        bash -c '
+        set -euo pipefail
+        export RUSTIC_PASSWORD="{{ vault_rustic_password }}"
+        /usr/local/bin/rustic_backup.py cleanup
+        '
+      args:
+        executable: /bin/bash
+      register: rustic_prune_result
+      changed_when: rustic_prune_result.rc == 0
+      failed_when: false
+      tags: [deploy, operations_loop, rustic, rustic_prune, phase7]
+
+    - name: 显示清理结果
+      ansible.builtin.debug:
+        msg: "Prune result: {{ rustic_prune_result.rc }}"
+      tags: [deploy, operations_loop, rustic, rustic_prune, phase7]

@@ -1,0 +1,13 @@
+---
+audit_enable_unattended_upgrades: true
+audit_enable_automatic_reboot: false
+audit_reboot_time: "04:00"
+
+# Security Audit (Lynis)
+audit_security_audit_lynis_dir: "{{ security_audit_lynis_dir | default('/opt/lynis') }}"
+audit_security_audit_report_dir: "{{ security_audit_report_dir | default('/var/log/lynis') }}"
+audit_security_audit_log_dir: "{{ security_audit_log_dir | default('/var/log/audit') }}"
+
+# 审计定时器调度 (systemd timer format)
+# 默认每天凌晨 3:00 运行
+audit_security_audit_timer_schedule: "{{ security_audit_timer_schedule | default('*-*-* 03:00:00') }}"

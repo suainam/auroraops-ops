@@ -1,0 +1,10 @@
+---
+# defaults file for runner
+runner_github_runner_version: "2.311.0"
+runner_github_runner_user: "admin"
+runner_github_runner_group: "admin"
+runner_github_runner_home: "/home/admin/actions-runner"
+runner_github_runner_service_name: "actions.runner.suainam-AuroraOps.ccuai.service"
+runner_github_runner_labels: ["self-hosted", "linux", "x64"]
+runner_github_runner_token: "" # Should be provided via Vault
+runner_github_runner_repo_url: "" # e.g., https://github.com/your-org/your-repo

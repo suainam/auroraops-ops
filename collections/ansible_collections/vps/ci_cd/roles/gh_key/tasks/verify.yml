@@ -1,0 +1,27 @@
+---
+# =============================================================================
+# Verify GitHub SSH Connection
+# =============================================================================
+
+- name: Test GitHub SSH connection
+  ansible.builtin.command: ssh -T -o StrictHostKeyChecking=accept-new git@github.com
+  register: gh_key_verify_result
+  changed_when: false
+  failed_when: false
+  tags: [verify, ci_cd, gh_key, phase9]
+
+- name: Check connection status
+  ansible.builtin.assert:
+    that:
+      - "'successfully authenticated' in gh_key_verify_result.stderr"
+    fail_msg: "GitHub SSH connection failed"
+    success_msg: "GitHub SSH connection successful"
+  when: not ansible_check_mode
+  tags: [verify, ci_cd, gh_key, phase9]
+
+- name: Display connection result
+  ansible.builtin.debug:
+    msg:
+      - "GitHub SSH Connection: {{ 'SUCCESS' if 'successfully authenticated' in gh_key_verify_result.stderr else 'FAILED' }}"
+      - "{{ gh_key_verify_result.stderr if gh_key_verify_result.stderr else 'No output (check mode)' }}"
+  tags: [verify, ci_cd, gh_key, phase9]

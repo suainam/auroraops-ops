@@ -1,0 +1,11 @@
+[Unit]
+Description=Rustic combined backup timer (rollback compatibility)
+
+[Timer]
+Unit=rustic-backup.service
+OnCalendar={{ rustic_backup_timer_calendar }}
+Persistent=false
+RandomizedDelaySec=0
+
+[Install]
+WantedBy=timers.target

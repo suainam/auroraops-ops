@@ -1,0 +1,36 @@
+---
+- name: 停止 cf_probe 服务
+  become: true
+  ansible.builtin.systemd_service:
+    name: cf-probe.service
+    state: stopped
+    enabled: false
+  tags: [rollback, rollback_verify, observability, cf_probe, phase6]
+
+
+- name: 删除 cf_probe 二进制文件
+  become: true
+  ansible.builtin.file:
+    path: "{{ cf_probe_install_dir }}/cf-probe"
+    state: absent
+  tags: [rollback, rollback_verify, observability, cf_probe, phase6]
+
+- name: 删除 cf_probe 配置目录
+  become: true
+  ansible.builtin.file:
+    path: "{{ cf_probe_config_dir }}"
+    state: absent
+  tags: [rollback, rollback_verify, observability, cf_probe, phase6]
+
+- name: 删除 cf_probe systemd 服务单元
+  become: true
+  ansible.builtin.file:
+    path: /etc/systemd/system/cf-probe.service
+    state: absent
+  tags: [rollback, rollback_verify, observability, cf_probe, phase6]
+
+- name: 重新加载 systemd
+  become: true
+  ansible.builtin.systemd:
+    daemon_reload: true
+  tags: [rollback, rollback_verify, observability, cf_probe, phase6]

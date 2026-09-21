@@ -1,0 +1,5 @@
+---
+- name: "更新回滚警告"
+  ansible.builtin.debug:
+    msg: "警告：常规软件包更新 (apt upgrade) 不支持自动回滚。如果系统出现异常，请考虑使用云服务商提供的快照恢复功能。"
+  tags: [rollback, operations_loop, update, phase8]

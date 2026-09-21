@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    env:
+      AURORAOPS_SKIP_VAULT: "1"
+      ANSIBLE_VAULT_PASSWORD_FILE: {% raw %}${{ github.workspace }}/.vault_pass_ci.txt{% endraw %}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Project Bootstrap (Mimic Production/Local Setup)
+        run: |
+          make bootstrap
+
+      - name: Prepare dummy vault password file
+        run: |
+          echo "ci_dummy_password" > .vault_pass_ci.txt
+
+      - name: Run syntax and lint checks
+        run: |
+          make check-syntax

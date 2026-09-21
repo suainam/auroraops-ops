@@ -1,0 +1,110 @@
+---
+# Monitoring Stack 角色任务
+# 启用控制变量: auroraops_roles['observability']['monitoring_stack']
+# 默认禁用，可通过 host_vars 启用
+
+- name: 监控栈部署流程
+  when: auroraops_roles['observability']['monitoring_stack'] | default(false) | bool
+  tags:
+    - deploy
+    - observability
+    - monitoring_stack
+    - phase6
+
+  block:
+    - name: 确保监控数据目录存在
+      become: true
+      ansible.builtin.file:
+        path: "{{ monitoring_stack_dir }}"
+        state: directory
+        mode: "0755"
+      tags:
+        - deploy
+        - observability
+        - monitoring
+
+    - name: 部署 Prometheus 配置文件
+      become: true
+      ansible.builtin.template:
+        src: prometheus.yml.j2
+        dest: "{{ monitoring_stack_dir }}/prometheus.yml"
+        mode: "0644"
+      tags:
+        - deploy
+        - observability
+        - monitoring
+
+    - name: 部署 Docker Compose 配置文件
+      become: true
+      no_log: true
+      diff: false
+      ansible.builtin.template:
+        src: docker-compose.yml.j2
+        dest: "{{ monitoring_stack_dir }}/docker-compose.yml"
+        mode: "0644"
+      tags:
+        - deploy
+        - observability
+        - monitoring
+
+    - name: 启动监控栈
+      become: true
+      community.docker.docker_compose_v2:
+        project_src: "{{ monitoring_stack_dir }}"
+        state: present
+        pull: always
+        recreate: auto
+      register: monitoring_stack_compose_result
+      tags:
+        - deploy
+        - observability
+        - monitoring
+
+    - name: 强制更新 Grafana 管理员密码
+      become: true
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - grafana
+          - grafana-cli
+          - admin
+          - reset-admin-password
+          - "{{ monitoring_stack_grafana_admin_password }}"
+      changed_when: true
+      when: monitoring_stack_compose_result.changed or monitoring_stack_grafana_admin_password is defined
+      no_log: true
+      tags:
+        - deploy
+        - observability
+        - monitoring
+
+- name: 检查监控栈目录是否存在 (禁用时)
+  ansible.builtin.stat:
+    path: "{{ monitoring_stack_dir }}"
+  register: monitoring_stack_mon_stack_dir_stat
+  when: not (auroraops_roles['observability']['monitoring_stack'] | default(false) | bool)
+  tags:
+    - deploy
+    - observability
+    - monitoring_stack
+    - phase6
+
+- name: 确保监控栈已停止 (当禁用时)
+  become: true
+  community.docker.docker_compose_v2:
+    project_src: "{{ monitoring_stack_dir }}"
+    state: absent
+  register: monitoring_stack_disabled_cleanup
+  failed_when: >-
+    monitoring_stack_disabled_cleanup.failed | default(false) and
+    'Cannot connect to the Docker daemon' not in monitoring_stack_disabled_cleanup.msg | default('') and
+    'No such file or directory' not in monitoring_stack_disabled_cleanup.msg | default('')
+  when:
+    - not (auroraops_roles['observability']['monitoring_stack'] | default(false) | bool)
+    - monitoring_stack_mon_stack_dir_stat.stat.exists
+  tags:
+    - deploy
+    - observability
+    - monitoring_stack
+    - phase6

@@ -1,0 +1,44 @@
+---
+- name: 监控栈验证流程
+  when: monitoring_stack_enabled | bool
+
+  tags:
+    - verify
+    - observability
+    - monitoring_stack
+    - phase6
+  block:
+    - name: 验证 Prometheus 容器状态
+      become: true
+      community.docker.docker_container_info:
+        name: prometheus
+      register: monitoring_stack_prometheus_info
+      failed_when: not monitoring_stack_prometheus_info.exists or not monitoring_stack_prometheus_info.container.State.Running
+      tags: [verify, observability, monitoring]
+
+    - name: 验证 Grafana 容器状态
+      become: true
+      community.docker.docker_container_info:
+        name: grafana
+      register: monitoring_stack_grafana_info
+      failed_when: not monitoring_stack_grafana_info.exists or not monitoring_stack_grafana_info.container.State.Running
+      tags: [verify, observability, monitoring]
+
+    - name: 验证 Node Exporter 容器状态
+      become: true
+      community.docker.docker_container_info:
+        name: node-exporter
+      register: monitoring_stack_node_exporter_info
+      failed_when: not monitoring_stack_node_exporter_info.exists or not monitoring_stack_node_exporter_info.container.State.Running
+      tags: [verify, observability, monitoring]
+
+    - name: 验证监控端口是否开放
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ item }}"
+        timeout: 5
+      loop:
+        - "{{ monitoring_stack_prometheus_port }}"
+        - "{{ monitoring_stack_grafana_port }}"
+        - "{{ monitoring_stack_node_exporter_port }}"
+      tags: [verify, observability, monitoring]

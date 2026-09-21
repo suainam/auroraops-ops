@@ -1,0 +1,22 @@
+---
+monitoring_stack_dir: /opt/monitoring
+monitoring_stack_prometheus_port: "{{ monitoring_prometheus_port | default(39090) }}"
+monitoring_stack_grafana_port: "{{ monitoring_grafana_port | default(33000) }}"
+monitoring_stack_node_exporter_port: "{{ monitoring_node_exporter_port | default(39100) }}"
+
+# 外部访问配置；旧 monitoring_* inventory 输入继续兼容。
+monitoring_stack_domain: "{{ monitoring_domain | default('mt.msuai.top') }}"
+monitoring_stack_grafana_root_url: >-
+  {{
+    monitoring_grafana_root_url
+    | default('https://' ~ monitoring_stack_domain ~ '/')
+  }}
+monitoring_stack_prometheus_external_url: >-
+  {{
+    monitoring_prometheus_external_url
+    | default('https://' ~ monitoring_stack_domain ~ '/prometheus')
+  }}
+
+# 默认密码 (建议在 inventory 中覆盖)
+monitoring_stack_grafana_admin_password: >-
+  {{ monitoring_grafana_admin_password | default('admin') }}

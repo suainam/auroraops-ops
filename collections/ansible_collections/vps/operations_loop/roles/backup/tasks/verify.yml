@@ -1,0 +1,115 @@
+---
+# 备份验证 - 快速版 (默认执行)
+# 使用: make verify-operations_loop.backup
+
+- name: 收集日期信息
+  ansible.builtin.setup:
+    filter: ansible_date_time
+  tags:
+    - verify
+    - operations_loop
+    - backup
+    - phase7
+
+- name: 检查 System 备份文件
+  become: true
+  ansible.builtin.find:
+    paths: "{{ backup_dest_system_dir }}"
+    patterns: "system_backup_10min_*.tar.gz"
+  register: backup_system_backup_files
+  tags:
+    - verify
+    - operations_loop
+    - backup
+    - phase7
+
+- name: 验证 System 备份存在
+  ansible.builtin.assert:
+    that: backup_system_backup_files.matched > 0
+    fail_msg: "System backup verification failed: No 10min backup files found in {{ backup_dest_system_dir }}"
+  tags:
+    - verify
+    - operations_loop
+    - backup
+    - phase7
+
+- name: 检查 Docker Config 备份
+  become: true
+  ansible.builtin.find:
+    paths: "{{ backup_dest_docker_dir }}/seeds"
+    patterns: "docker_config_seed_10min_*.tar.gz"
+  register: backup_docker_config_backups
+  when: docker_backup_enabled | default(true)
+  tags:
+    - verify
+    - operations_loop
+    - backup
+    - phase7
+
+- name: 检查 Docker DB 备份
+  become: true
+  ansible.builtin.find:
+    paths: "{{ backup_dest_docker_dir }}/db"
+    patterns: "docker_db_10min_*.tar.gz"
+  register: backup_docker_db_backups
+  when: docker_backup_enabled | default(true)
+  tags:
+    - verify
+    - operations_loop
+    - backup
+    - phase7
+
+- name: 检查 Docker Full 备份 (每月1号)
+  become: true
+  ansible.builtin.find:
+    paths: "{{ backup_dest_docker_dir }}/full"
+    patterns: "docker_full_10min_*.tar.gz"
+  register: backup_docker_full_backups
+  when: docker_backup_enabled | default(true) and ansible_date_time.day == "01"
+  tags:
+    - verify
+    - operations_loop
+    - backup
+    - phase7
+
+- name: 验证 Docker 备份完整性
+  ansible.builtin.assert:
+    that:
+      - (not (docker_backup_enabled | default(true))) or (backup_docker_config_backups.matched > 0)
+      - (not (docker_backup_enabled | default(true))) or (backup_docker_db_backups.matched > 0)
+    fail_msg: "Docker backup verification failed: Missing backup files in {{ backup_dest_docker_dir }}"
+  tags:
+    - verify
+    - operations_loop
+    - backup
+    - phase7
+
+# 深度验证 (仅 backup_full 子标签时执行)
+# 使用: make verify-operations_loop.backup.backup_full
+
+- name: 深度备份验证 (哈希校验 + 增量逻辑 + 内容抽样)
+  become: true
+  ansible.builtin.command: "{{ python_executor }} /root/AuroraOps/scripts/verify_backup_system.py backup"
+  register: backup_verify_result
+  changed_when: false
+  timeout: 600
+  tags:
+    - verify
+    - operations_loop
+    - backup
+    - backup_full
+    - phase7
+  when: "'backup_full' in ansible_run_tags"
+
+- name: 输出深度验证结果
+  ansible.builtin.debug:
+    msg: "{{ backup_verify_result.stdout }}"
+  when:
+    - "'backup_full' in ansible_run_tags"
+    - backup_verify_result.rc == 0
+  tags:
+    - verify
+    - operations_loop
+    - backup
+    - backup_full
+    - phase7

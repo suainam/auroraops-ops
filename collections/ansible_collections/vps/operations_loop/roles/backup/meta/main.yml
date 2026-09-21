@@ -1,0 +1,5 @@
+---
+# 依赖关系
+# backup 角色直接使用 application_service 和 application_timer 模板
+# 不再依赖 backup_service 和 backup_timer
+dependencies: []

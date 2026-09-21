@@ -1,0 +1,8 @@
+---
+# defaults file for workflow
+workflow_github_workflows_dir: ".github/workflows"
+workflow_github_workflows_to_deploy:
+  - name: ci.yml
+    template: ci.yml.j2
+  - name: deploy-phase.yml
+    template: deploy-phase.yml.j2

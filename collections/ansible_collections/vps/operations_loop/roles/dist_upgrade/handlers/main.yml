@@ -1,0 +1,5 @@
+---
+- name: Refresh apt cache after dist-upgrade rollback
+  become: true
+  ansible.builtin.apt:
+    update_cache: true

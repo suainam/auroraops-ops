@@ -1,0 +1,86 @@
+---
+- name: Validate GitHub Actions watchdog configuration
+  ansible.builtin.assert:
+    that:
+      - github_auroraops_token is defined
+      - github_auroraops_token | string | length > 0
+      - github_actions_watchdog_targets | length > 0
+      - item.repository is match('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')
+      - item.workflow | string | length > 0
+      - item.ref | string | length > 0
+    fail_msg: "GitHub Actions watchdog token or target configuration is invalid"
+  loop: "{{ github_actions_watchdog_targets }}"
+  no_log: true
+  tags: [deploy, operations_loop, github_actions_watchdog, github_actions_watchdog_preflight, phase7]
+
+- name: Install GitHub Actions watchdog CLI
+  become: true
+  ansible.builtin.copy:
+    src: github_actions_watchdog.py
+    dest: "{{ github_actions_watchdog_script_path }}"
+    owner: root
+    group: root
+    mode: "0750"
+  tags: [deploy, operations_loop, github_actions_watchdog, github_actions_watchdog_install, phase7]
+
+- name: Install GitHub Actions watchdog environment
+  become: true
+  ansible.builtin.template:
+    src: github-actions-watchdog.env.j2
+    dest: "{{ github_actions_watchdog_environment_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  tags: [deploy, operations_loop, github_actions_watchdog, github_actions_watchdog_config, phase7]
+
+- name: Install GitHub Actions watchdog targets
+  become: true
+  ansible.builtin.template:
+    src: github-actions-watchdog-targets.json.j2
+    dest: "{{ github_actions_watchdog_targets_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [deploy, operations_loop, github_actions_watchdog, github_actions_watchdog_config, phase7]
+
+- name: Deploy GitHub Actions watchdog service
+  ansible.builtin.include_role:
+    name: vps.applications.application_service
+  vars:
+    app_service_name: "{{ github_actions_watchdog_service_name }}"
+    app_service_description: "Recover GitHub Actions workflows disabled by inactivity"
+    app_service_type: oneshot
+    app_service_exec_start: "{{ python_executor }} {{ github_actions_watchdog_script_path }}"
+    app_service_user: root
+    app_service_group: root
+    app_service_environment_file: "{{ github_actions_watchdog_environment_file }}"
+    app_service_environment:
+      GITHUB_ACTIONS_WATCHDOG_API_URL: "{{ github_actions_watchdog_api_url }}"
+      GITHUB_ACTIONS_WATCHDOG_TARGETS_FILE: "{{ github_actions_watchdog_targets_file }}"
+      GITHUB_ACTIONS_WATCHDOG_HOSTNAME: "{{ inventory_hostname }}"
+      GITHUB_ACTIONS_WATCHDOG_NOTIFIER: "{{ github_actions_watchdog_notifier_path }}"
+      GITHUB_ACTIONS_WATCHDOG_NOTIFIER_PYTHON: "{{ github_actions_watchdog_notifier_python }}"
+      GITHUB_ACTIONS_WATCHDOG_NOTIFY_FAILURE: "{{ github_actions_watchdog_notify_failure | bool | ternary('true', 'false') }}"
+    app_service_timeout: 120
+    app_service_restart: "no"
+    app_service_enabled: false
+    app_service_state: stopped
+  tags: [deploy, operations_loop, github_actions_watchdog, github_actions_watchdog_service, phase7]
+
+- name: Deploy GitHub Actions watchdog timer
+  ansible.builtin.include_role:
+    name: vps.applications.application_timer
+  vars:
+    app_timer_name: "{{ github_actions_watchdog_service_name }}"
+    app_timer_description: "Monthly GitHub Actions inactivity watchdog"
+    app_timer_on_calendar: "{{ github_actions_watchdog_timer_calendar }}"
+    app_timer_randomized_delay: "{{ github_actions_watchdog_randomized_delay }}"
+    app_timer_persistent: true
+    app_timer_enabled: true
+    app_timer_state: started
+  tags: [deploy, operations_loop, github_actions_watchdog, github_actions_watchdog_timer, phase7]
+
+- name: Flush GitHub Actions watchdog unit handlers
+  ansible.builtin.meta: flush_handlers
+  tags: [deploy, operations_loop, github_actions_watchdog, phase7]

@@ -1,0 +1,7 @@
+---
+galaxy_info:
+  author: AuroraOps
+  description: Cloudflare Server Monitor Probe Agent (cf-probe)
+  license: MIT
+  min_ansible_version: "2.14"
+dependencies: []

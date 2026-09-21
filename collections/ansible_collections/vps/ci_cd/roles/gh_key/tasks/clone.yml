@@ -1,0 +1,20 @@
+---
+# =============================================================================
+# Clone Repository
+# =============================================================================
+
+- name: Clone repository
+  ansible.builtin.git:
+    repo: "git@github.com:{{ gh_key_repo }}.git"
+    dest: "{{ gh_key_clone_dest }}"
+    version: "{{ gh_key_clone_version }}"
+    accept_hostkey: true
+    update: true
+  when: gh_key_clone_repo | bool and not ansible_check_mode
+  tags: [deploy, ci_cd, gh_key, gh_key_clone, phase9]
+
+- name: Display clone result
+  ansible.builtin.debug:
+    msg: "Repository cloned to {{ gh_key_clone_dest }}"
+  when: gh_key_clone_repo | bool and not ansible_check_mode
+  tags: [deploy, ci_cd, gh_key, gh_key_clone, phase9]

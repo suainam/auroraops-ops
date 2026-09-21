@@ -1,0 +1,21 @@
+---
+- name: Restart Rustic backup service
+  ansible.builtin.systemd_service:
+    name: "rustic-backup@{{ rustic_backup_type }}"
+    state: restarted
+    enabled: true
+  when: rustic_backup_type is defined and not ansible_check_mode
+  tags: [deploy, Rustic, restart]
+
+- name: Restart Rustic backup timer
+  ansible.builtin.systemd_service:
+    name: "rustic-backup.timer"
+    state: restarted
+    enabled: true
+  when: not ansible_check_mode
+  tags: [deploy, Rustic, restart]
+
+- name: Log Rustic init
+  ansible.builtin.debug:
+    msg: "Rustic repository initialized successfully"
+  tags: [deploy, Rustic, init]

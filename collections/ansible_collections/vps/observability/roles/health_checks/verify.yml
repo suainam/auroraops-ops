@@ -1,0 +1,134 @@
+---
+# 验证健康检查部署任务
+
+- name: 检查 jq, curl 和 redis-tools 是否安装
+  ansible.builtin.apt:
+    name:
+      - jq
+      - curl
+      - redis-tools
+    state: present
+  check_mode: true
+  register: apt_check
+  failed_when: apt_check.changed
+  tags: [phase4, observability, health_checks, verify]
+
+- name: 检查 health_check_runner.sh 脚本是否存在且可执行
+  ansible.builtin.stat:
+    path: /usr/local/bin/health_check_runner.sh
+  register: runner_script_stat
+  failed_when: not runner_script_stat.stat.exists or not runner_script_stat.stat.executable
+  tags: [phase4, observability, health_checks, verify]
+
+- name: 检查 notifier.sh 脚本是否存在且可执行
+  ansible.builtin.stat:
+    path: /usr/local/bin/notifier.sh
+  register: notifier_script_stat
+  failed_when: not notifier_script_stat.stat.exists or not notifier_script_stat.stat.executable
+  tags: [phase4, observability, health_checks, verify]
+
+- name: 读取 root 用户的 crontab 内容
+  ansible.builtin.shell: "crontab -l -u root"
+  register: root_crontab_content
+  changed_when: false
+  failed_when: false # 即使 crontab 为空也不失败
+  tags: [phase4, observability, health_checks, verify]
+
+- name: 验证 health_check_runner.sh cron 任务是否存在
+  ansible.builtin.assert:
+    that:
+      - "'/usr/local/bin/health_check_runner.sh | /usr/local/bin/notifier.sh' in root_crontab_content.stdout"
+    msg: "健康检查和通知 cron 任务未找到。"
+  tags: [phase4, observability, health_checks, verify]
+
+- name: 验证 notifier.sh process_queue cron 任务是否存在
+  ansible.builtin.assert:
+    that:
+      - "'/usr/local/bin/notifier.sh process_queue' in root_crontab_content.stdout"
+    msg: "通知队列处理 cron 任务未找到。"
+  tags: [phase4, observability, health_checks, verify]
+
+- name: 尝试运行 health_check_runner.sh 脚本并捕获输出
+  ansible.builtin.shell: "timeout 30s /usr/local/bin/health_check_runner.sh"
+  register: runner_output
+  changed_when: false
+  failed_when: runner_output.rc != 0 and runner_output.rc != 124 # 124 是 timeout 的退出码
+  tags: [phase4, observability, health_checks, verify]
+
+- name: 验证 health_check_runner.sh 输出是否为有效 JSON
+  ansible.builtin.assert:
+    that:
+      - "runner_output.stdout | from_json is defined"
+    msg: "health_check_runner.sh 输出不是有效的 JSON。"
+  tags: [phase4, observability, health_checks, verify]
+
+- name: 验证 health_check_runner.sh 输出 JSON 中是否包含 'checks' 键
+  ansible.builtin.assert:
+    that:
+      - "'checks' in (runner_output.stdout | from_json)"
+    msg: "health_check_runner.sh 输出 JSON 中缺少 'checks' 键。"
+  tags: [phase4, observability, health_checks, verify]
+
+- name: 验证健康检查日志文件是否存在
+  ansible.builtin.stat:
+    path: "/var/log/health_checks/notify.log"
+  register: log_file_stat
+  failed_when: not log_file_stat.stat.exists
+  tags: [phase4, observability, health_checks, verify]
+
+- name: 尝试运行 notifier.sh 脚本 (通过管道传递 JSON)
+  ansible.builtin.shell: "echo '{{ runner_output.stdout | to_json }}' | timeout 30s /usr/local/bin/notifier.sh"
+  register: notifier_run_output
+  changed_when: false
+  failed_when: notifier_run_output.rc != 0 and notifier_run_output.rc != 124 # 124 是 timeout 的退出码
+  tags: [phase4, observability, health_checks, verify]
+
+- name: 验证 notifier.sh 日志中是否有成功推送的记录 (如果 API Key 有效)
+  ansible.builtin.command: grep -q "Successfully pushed data to API" "/var/log/health_checks/notify.log"
+  register: log_push_success_check
+  changed_when: false
+  failed_when: false # 即使没有成功推送，也可能是因为 API Key 无效，不应直接失败
+  tags: [phase4, observability, health_checks, verify]
+
+- name: 验证 notifier.sh 日志中是否有入队到 Redis 的记录 (如果 API 推送失败)
+  ansible.builtin.command: grep -q "Data successfully enqueued to Redis" "/var/log/health_checks/notify.log"
+  register: log_enqueue_check
+  changed_when: false
+  failed_when: false # 即使没有入队，也可能是因为 API 推送成功，不应直接失败
+  tags: [phase4, observability, health_checks, verify]
+
+- name: 验证自愈动作：停止一个支持自愈的服务 (例如 nginx)
+  become: true
+  ansible.builtin.systemd:
+    name: nginx
+    state: stopped
+  ignore_errors: true # 如果 nginx 未安装或已停止，不失败
+  register: nginx_stop_output
+  when: "'nginx' in health_checks_self_healing_services"
+  tags: [phase4, observability, health_checks, verify, self_healing_test]
+
+- name: 运行 health_check_runner.sh 触发自愈 (如果服务已停止)
+  ansible.builtin.shell: "timeout 30s /usr/local/bin/health_check_runner.sh"
+  register: self_healing_runner_output
+  changed_when: false
+  when: "'nginx' in health_checks_self_healing_services"
+  tags: [phase4, observability, health_checks, verify, self_healing_test]
+
+- name: 验证服务是否已自动重启 (例如 nginx)
+  become: true
+  ansible.builtin.systemd:
+    name: nginx
+    state: started
+  check_mode: true
+  register: nginx_restarted_check
+  failed_when: nginx_restarted_check.changed # 如果 changed 为 true，说明服务没有自动重启
+  when: "'nginx' in health_checks_self_healing_services"
+  tags: [phase4, observability, health_checks, verify, self_healing_test]
+
+- name: 验证日志中是否有自愈成功的记录
+  ansible.builtin.command: grep -q "was restarted successfully." "/var/log/health_checks/notify.log"
+  register: log_self_healing_success_check
+  changed_when: false
+  failed_when: log_self_healing_success_check.rc != 0
+  when: "'nginx' in health_checks_self_healing_services"
+  tags: [phase4, observability, health_checks, verify, self_healing_test]

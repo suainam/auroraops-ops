@@ -1,0 +1,96 @@
+---
+# 启用控制变量: auroraops_roles['operations_loop']['dist_upgrade'] (定义在 group_vars/all/roles.yml 和 host_vars/)
+# 默认: true (如需禁用，在 host_vars 中设置为 false)
+
+- name: 角色启用检查
+  ansible.builtin.debug:
+    msg: "Role dist_upgrade is disabled, skipping"
+  when: not (auroraops_roles['operations_loop']['dist_upgrade'] | default(true) | bool)
+  tags: [deploy, dist_upgrade, operations_loop, phase8]
+
+- name: 角色已启用，执行 Dist Upgrade 任务
+  ansible.builtin.debug:
+    msg: "Executing dist_upgrade role tasks"
+  when: auroraops_roles['operations_loop']['dist_upgrade'] | default(true) | bool
+  tags: [deploy, dist_upgrade, operations_loop, phase8]
+
+- name: 检查是否确认执行升级
+  ansible.builtin.fail:
+    msg: "警告：您正在尝试执行操作系统大版本升级！请在 variables 中设置 'dist_upgrade_confirm: true' 以确认您已做好备份并理解风险。"
+  when: not dist_upgrade_confirm
+  tags: [dist_upgrade_upgrade, dist_upgrade_dangerous, deploy, operations_loop, dist_upgrade, phase8]
+
+- name: 检查当前发行版
+  ansible.builtin.set_fact:
+    dist_upgrade_current_dist: "{{ ansible_distribution_release }}"
+  when: auroraops_roles['operations_loop']['dist_upgrade'] | default(true) | bool
+  tags: [deploy, operations_loop, dist_upgrade, phase8]
+
+- name: 如果已是目标版本则跳过
+  ansible.builtin.debug:
+    msg: 系统已处于 {{ dist_upgrade_current_dist }}，无需升级。
+  when: dist_upgrade_current_dist == dist_upgrade_target_codename
+  tags: [dist_upgrade_upgrade, deploy, operations_loop, dist_upgrade, phase8]
+
+- name: 执行大版本升级流程
+  when: dist_upgrade_current_dist != dist_upgrade_target_codename and (auroraops_roles['operations_loop']['dist_upgrade'] | default(true) | bool)
+  tags: [dist_upgrade_upgrade, deploy, operations_loop, dist_upgrade, phase8]
+  block:
+    - name: 1. 确保当前版本的所有包已更新到最新
+      become: true
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+      tags: [upgrade, step1]
+
+    - name: 2. 备份现有的 sources.list
+      become: true
+      ansible.builtin.copy:
+        src: /etc/apt/sources.list
+        dest: /etc/apt/sources.list.{{ dist_upgrade_current_dist }}.bk
+        remote_src: true
+        mode: "0644"
+      when: dist_upgrade_backup_sources
+      tags: [upgrade, step2]
+
+    - name: 3. 执行 APT 源代号替换
+      become: true
+      ansible.builtin.replace:
+        path: /etc/apt/sources.list
+        regexp: "{{ dist_upgrade_old_codename }}"
+        replace: "{{ dist_upgrade_target_codename }}"
+      tags: [upgrade, step3]
+
+    - name: 4. 更新新版本的软件包缓存
+      become: true
+      ansible.builtin.apt:
+        update_cache: true
+      tags: [upgrade, step4]
+
+    - name: 5. 执行最小化升级 (Safe Upgrade)
+      become: true
+      ansible.builtin.apt:
+        upgrade: safe
+      tags: [upgrade, step5]
+
+    - name: 6. 执行全量发行版升级 (Full Upgrade)
+      become: true
+      ansible.builtin.apt:
+        upgrade: dist
+        dpkg_options: force-confold,force-confdef
+      tags: [upgrade, step6]
+
+    - name: 7. 移除不再需要的孤儿包
+      become: true
+      ansible.builtin.apt:
+        autoremove: true
+        purge: true
+      tags: [upgrade, step7]
+
+    - name: 8. 重启系统以应用新内核
+      become: true
+      ansible.builtin.reboot:
+        msg: Ansible 正在执行 Debian {{ dist_upgrade_target_codename }} 升级后的重启
+        reboot_timeout: 1200
+      when: dist_upgrade_reboot_after
+      tags: [upgrade, step8]

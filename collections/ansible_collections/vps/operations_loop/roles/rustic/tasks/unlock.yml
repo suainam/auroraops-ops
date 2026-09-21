@@ -1,0 +1,38 @@
+---
+- name: 解锁 Rustic 仓库 (Rustic 无锁机制，通常不需要)
+  tags: [deploy, operations_loop, rustic, rustic_unlock, phase7]
+  block:
+    - name: 解锁本地仓库
+      ansible.builtin.command: |
+        bash -c '
+        set -euo pipefail
+        export RUSTIC_PASSWORD="{{ vault_rustic_password }}"
+        rustic -r {{ backup_base_dir }}/complete unlock
+        '
+      args:
+        executable: /bin/bash
+      register: rustic_unlock_local
+      changed_when: rustic_unlock_local.rc == 0
+      failed_when: false
+      tags: [deploy, operations_loop, rustic, rustic_unlock, phase7]
+
+    - name: 解锁云端仓库
+      ansible.builtin.command: |
+        bash -c '
+        set -euo pipefail
+        export RUSTIC_PASSWORD="{{ vault_rustic_password }}"
+        {% for remote in backup_cloud_remotes %}
+        rustic -r rclone:{{ remote }}:{{ backup_cloud_prefix }}/complete unlock
+        {% endfor %}
+        '
+      args:
+        executable: /bin/bash
+      register: rustic_unlock_cloud
+      changed_when: rustic_unlock_cloud.rc == 0
+      failed_when: false
+      tags: [deploy, operations_loop, rustic, rustic_unlock, phase7]
+
+    - name: 显示解锁结果
+      ansible.builtin.debug:
+        msg: "Unlock: Local={{ rustic_unlock_local.rc }}, Cloud={{ rustic_unlock_cloud.rc }}"
+      tags: [deploy, operations_loop, rustic, rustic_unlock, phase7]

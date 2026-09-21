@@ -1,0 +1,15 @@
+---
+# 是否确认执行大版本升级 (必须手动设为 true 才会执行)
+dist_upgrade_confirm: false
+
+# 升级后的代号
+dist_upgrade_target_codename: "trixie"
+
+# 升级前的旧代号 (用于替换)
+dist_upgrade_old_codename: "bookworm"
+
+# 是否在升级后自动重启
+dist_upgrade_reboot_after: true
+
+# 是否备份 APT 源文件
+dist_upgrade_backup_sources: true

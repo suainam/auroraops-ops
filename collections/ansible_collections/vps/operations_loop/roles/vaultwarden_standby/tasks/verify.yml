@@ -1,0 +1,351 @@
+---
+- name: Verify Vaultwarden standby source managed files
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ vaultwarden_standby_source_snapshot_root }}"
+    - "{{ vaultwarden_standby_source_rsyncd_config }}"
+    - "{{ vaultwarden_standby_source_sudoers }}"
+    - "{{ vaultwarden_standby_source_authorized_keys }}"
+  register: vaultwarden_standby_source_files
+  when: vaultwarden_standby_mode == 'source'
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Assert Vaultwarden standby source files exist
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+    fail_msg: "Vaultwarden standby source file is missing: {{ item.item }}"
+  loop: "{{ vaultwarden_standby_source_files.results | default([]) }}"
+  when: vaultwarden_standby_mode == 'source'
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Validate Vaultwarden standby sudo policy
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/visudo
+      - -cf
+      - "{{ vaultwarden_standby_source_sudoers }}"
+  changed_when: false
+  when: vaultwarden_standby_mode == 'source'
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Read restricted source user record
+  ansible.builtin.command:
+    argv:
+      - getent
+      - passwd
+      - "{{ vaultwarden_standby_source_user }}"
+  register: vaultwarden_standby_source_user_record
+  changed_when: false
+  when: vaultwarden_standby_mode == 'source'
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Read restricted authorized key policy
+  become: true
+  ansible.builtin.slurp:
+    src: "{{ vaultwarden_standby_source_authorized_keys }}"
+  register: vaultwarden_standby_authorized_key_policy
+  when: vaultwarden_standby_mode == 'source'
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Read read-only rsync module policy
+  become: true
+  ansible.builtin.slurp:
+    src: "{{ vaultwarden_standby_source_rsyncd_config }}"
+  register: vaultwarden_standby_rsyncd_policy
+  when: vaultwarden_standby_mode == 'source'
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Assert source identity is restricted and read-only
+  ansible.builtin.assert:
+    that:
+      - vaultwarden_standby_source_user_record.stdout.endswith(':/bin/dash')
+      - "'restrict,from=\"' ~ vaultwarden_standby_peer_zerotier_ip ~ '\"' in (vaultwarden_standby_authorized_key_policy.content | b64decode)"
+      - "'command=\"' ~ vaultwarden_standby_source_fixed_command ~ '\"' in (vaultwarden_standby_authorized_key_policy.content | b64decode)"
+      - "'read only = true' in (vaultwarden_standby_rsyncd_policy.content | b64decode)"
+    fail_msg: "Vaultwarden standby source access is not fully restricted"
+  when: vaultwarden_standby_mode == 'source'
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Check Vaultwarden standby receiver managed files
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: >-
+    {{
+      [
+        vaultwarden_standby_script_path,
+        vaultwarden_standby_dr_script_path,
+        vaultwarden_standby_ssh_key,
+        vaultwarden_standby_ssh_key ~ '.pub',
+        vaultwarden_standby_known_hosts,
+        '/etc/systemd/system/' ~ vaultwarden_standby_service_name ~ '.service',
+        '/etc/systemd/system/' ~ vaultwarden_standby_service_name ~ '.timer',
+        vaultwarden_standby_root ~ '/latest.json'
+      ]
+      + (
+        [
+          '/etc/systemd/system/' ~ vaultwarden_standby_dr_health_service_name ~ '.service',
+          '/etc/systemd/system/' ~ vaultwarden_standby_dr_health_service_name ~ '.timer'
+        ]
+        if not (vaultwarden_standby_snapshot_only | bool)
+        else []
+      )
+    }}
+  register: vaultwarden_standby_receiver_files
+  when: vaultwarden_standby_mode == 'standby'
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Assert Vaultwarden standby receiver files exist
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+    fail_msg: "Vaultwarden standby receiver file is missing: {{ item.item }}"
+  loop: "{{ vaultwarden_standby_receiver_files.results | default([]) }}"
+  when: vaultwarden_standby_mode == 'standby'
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Verify Vaultwarden standby timer is active
+  become: true
+  ansible.builtin.command:
+    argv: [systemctl, is-active, "{{ vaultwarden_standby_service_name }}.timer"]
+  changed_when: false
+  when:
+    - vaultwarden_standby_mode == 'standby'
+    - vaultwarden_standby_timer_enabled | bool
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Verify Vaultwarden standby timer is enabled
+  become: true
+  ansible.builtin.command:
+    argv: [systemctl, is-enabled, "{{ vaultwarden_standby_service_name }}.timer"]
+  changed_when: false
+  when:
+    - vaultwarden_standby_mode == 'standby'
+    - vaultwarden_standby_timer_enabled | bool
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Verify Vaultwarden DR health timer is active
+  become: true
+  ansible.builtin.command:
+    argv: [systemctl, is-active, "{{ vaultwarden_standby_dr_health_service_name }}.timer"]
+  changed_when: false
+  when:
+    - vaultwarden_standby_mode == 'standby'
+    - vaultwarden_standby_dr_health_timer_enabled | bool
+    - not (vaultwarden_standby_snapshot_only | bool)
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_dr, phase7]
+
+- name: Verify Vaultwarden DR health timer is enabled
+  become: true
+  ansible.builtin.command:
+    argv: [systemctl, is-enabled, "{{ vaultwarden_standby_dr_health_service_name }}.timer"]
+  changed_when: false
+  when:
+    - vaultwarden_standby_mode == 'standby'
+    - vaultwarden_standby_dr_health_timer_enabled | bool
+    - not (vaultwarden_standby_snapshot_only | bool)
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_dr, phase7]
+- name: Check Vaultwarden DR health timer presence in snapshot-only mode
+  become: true
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ vaultwarden_standby_dr_health_service_name }}.timer"
+  register: vaultwarden_standby_snapshot_only_health_timer
+  when:
+    - vaultwarden_standby_mode == 'standby'
+    - vaultwarden_standby_snapshot_only | bool
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_dr, phase7]
+
+- name: Verify Vaultwarden DR health timer is inactive in snapshot-only mode
+  become: true
+  ansible.builtin.command:
+    argv: [systemctl, is-active, "{{ vaultwarden_standby_dr_health_service_name }}.timer"]
+  register: vaultwarden_standby_health_timer_active_check
+  changed_when: false
+  failed_when: vaultwarden_standby_health_timer_active_check.rc == 0
+  when:
+    - vaultwarden_standby_mode == 'standby'
+    - vaultwarden_standby_snapshot_only | bool
+    - vaultwarden_standby_snapshot_only_health_timer.stat.exists | default(false)
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_dr, phase7]
+
+- name: Verify latest local Vaultwarden standby snapshot
+  become: true
+  ansible.builtin.command:
+    argv:
+      - "{{ python_executor }}"
+      - "{{ vaultwarden_standby_script_path }}"
+      - verify
+      - latest
+  environment:
+    VAULTWARDEN_STANDBY_ROOT: "{{ vaultwarden_standby_root }}"
+    VAULTWARDEN_STANDBY_CONTAINER: "{{ vaultwarden_standby_container_name }}"
+    VAULTWARDEN_STANDBY_MODE: "{{ 'snapshot-only' if (vaultwarden_standby_snapshot_only | bool) else 'passive' }}"
+    VAULTWARDEN_STANDBY_SNAPSHOT_ONLY: "{{ 'true' if (vaultwarden_standby_snapshot_only | bool) else 'false' }}"
+  changed_when: false
+  register: vaultwarden_standby_verify_result
+  when: vaultwarden_standby_mode == 'standby'
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Read Vaultwarden standby status
+  become: true
+  ansible.builtin.command:
+    argv:
+      - "{{ python_executor }}"
+      - "{{ vaultwarden_standby_script_path }}"
+      - status
+  environment:
+    VAULTWARDEN_STANDBY_ROOT: "{{ vaultwarden_standby_root }}"
+    VAULTWARDEN_STANDBY_SOURCE: "{{ vaultwarden_standby_source_user }}@{{ vaultwarden_standby_source_host }}::{{ vaultwarden_standby_source_module }}/"
+    VAULTWARDEN_STANDBY_SOURCE_PORT: "{{ vaultwarden_standby_source_port }}"
+    VAULTWARDEN_STANDBY_CONTAINER: "{{ vaultwarden_standby_container_name }}"
+    VAULTWARDEN_STANDBY_MODE: "{{ 'snapshot-only' if (vaultwarden_standby_snapshot_only | bool) else 'passive' }}"
+    VAULTWARDEN_STANDBY_SNAPSHOT_ONLY: "{{ 'true' if (vaultwarden_standby_snapshot_only | bool) else 'false' }}"
+  register: vaultwarden_standby_status_result
+  changed_when: false
+  when: vaultwarden_standby_mode == 'standby'
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Read Vaultwarden manual DR status
+  become: true
+  ansible.builtin.command:
+    argv:
+      - "{{ python_executor }}"
+      - "{{ vaultwarden_standby_dr_script_path }}"
+      - status
+  environment:
+    VAULTWARDEN_DR_ROOT: "{{ vaultwarden_standby_dr_root }}"
+    VAULTWARDEN_STANDBY_ROOT: "{{ vaultwarden_standby_root }}"
+    VAULTWARDEN_STANDBY_CONTAINER: "{{ vaultwarden_standby_container_name }}"
+    VAULTWARDEN_DR_DATA_DIR: "{{ vaultwarden_standby_dr_data_dir }}"
+    VAULTWARDEN_DR_SYNC_TIMER: "{{ vaultwarden_standby_service_name }}.timer"
+    VAULTWARDEN_DR_MAX_SNAPSHOT_AGE_SECONDS: "{{ vaultwarden_standby_max_age_seconds }}"
+    VAULTWARDEN_DR_HEALTH_FAILURE_THRESHOLD: "{{ vaultwarden_standby_dr_health_failure_threshold }}"
+    VAULTWARDEN_DR_HEALTH_TIMEOUT_SECONDS: "{{ vaultwarden_standby_dr_health_timeout_seconds }}"
+    VAULTWARDEN_DR_PRIMARY_HEALTH_URL: "{{ vaultwarden_standby_dr_primary_health_url }}"
+    VAULTWARDEN_DR_PRIMARY_SSH_HOST: "{{ vaultwarden_standby_dr_primary_ssh_host }}"
+    VAULTWARDEN_DR_PRIMARY_SSH_PORT: "{{ vaultwarden_standby_dr_primary_ssh_port }}"
+    VAULTWARDEN_DR_TUNNEL_READY_URL: "{{ vaultwarden_standby_dr_tunnel_ready_url }}"
+    VAULTWARDEN_DR_LOCAL_HEALTH_URL: "{{ vaultwarden_standby_dr_local_health_url }}"
+    VAULTWARDEN_DR_PUBLIC_HEALTH_URL: "{{ vaultwarden_standby_dr_public_health_url }}"
+  register: vaultwarden_standby_dr_status_result
+  changed_when: false
+  when:
+    - vaultwarden_standby_mode == 'standby'
+    - not (vaultwarden_standby_snapshot_only | bool)
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_dr, phase7]
+
+- name: Assert Vaultwarden manual DR passive contract
+  ansible.builtin.assert:
+    that:
+      - (vaultwarden_standby_dr_status_result.stdout | from_json).mode == 'passive'
+      - (vaultwarden_standby_dr_status_result.stdout | from_json).latest_snapshot_status == 'valid'
+      - (vaultwarden_standby_dr_status_result.stdout | from_json).snapshot_age_seconds | int <= vaultwarden_standby_max_age_seconds | int
+      - (vaultwarden_standby_dr_status_result.stdout | from_json).container_status in ['created', 'exited']
+      - (vaultwarden_standby_dr_status_result.stdout | from_json).tunnel_ready_status == 200
+      - (vaultwarden_standby_dr_status_result.stdout | from_json).primary_health_url == vaultwarden_standby_dr_primary_health_url
+    fail_msg: "Vaultwarden manual DR passive contract is not satisfied"
+  when:
+    - vaultwarden_standby_mode == 'standby'
+    - not (vaultwarden_standby_snapshot_only | bool)
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_dr, phase7]
+
+- name: Inspect Vaultwarden cold standby container
+  become: true
+  ansible.builtin.command:
+    argv:
+      - docker
+      - inspect
+      - "{{ vaultwarden_standby_container_name }}"
+  register: vaultwarden_standby_container_inspect
+  changed_when: false
+  no_log: true
+  when:
+    - vaultwarden_standby_mode == 'standby'
+    - not (vaultwarden_standby_snapshot_only | bool)
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_container, phase7]
+
+- name: Inspect Vaultwarden standby image architecture
+  become: true
+  ansible.builtin.command:
+    argv:
+      - docker
+      - image
+      - inspect
+      - "{{ vaultwarden_image }}"
+  register: vaultwarden_standby_image_inspect
+  changed_when: false
+  when:
+    - vaultwarden_standby_mode == 'standby'
+    - not (vaultwarden_standby_snapshot_only | bool)
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_container, phase7]
+
+- name: Inspect existing SillyTavern container
+  become: true
+  ansible.builtin.command:
+    argv:
+      - docker
+      - inspect
+      - sillytavern
+  register: vaultwarden_standby_sillytavern_inspect
+  changed_when: false
+  when:
+    - vaultwarden_standby_mode == 'standby'
+    - not (vaultwarden_standby_snapshot_only | bool)
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_container, phase7]
+
+- name: Warn when Raspberry Pi kernel cannot enforce the Vaultwarden memory limit
+  ansible.builtin.debug:
+    msg: >-
+      Docker reports HostConfig.Memory=0 because this Raspberry Pi kernel does not
+      expose memory cgroup limits. The cold standby remains stopped with restart=no;
+      CPU and loopback-only port restrictions are still enforced.
+  when:
+    - vaultwarden_standby_mode == 'standby'
+    - not (vaultwarden_standby_snapshot_only | bool)
+    - (vaultwarden_standby_container_inspect.stdout | default('[]') | from_json)[0].HostConfig.Memory | default(1) == 0
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_container, phase7]
+
+- name: Assert Vaultwarden standby runtime contract
+  ansible.builtin.assert:
+    that:
+      - (vaultwarden_standby_verify_result.stdout | from_json).sqlite_quick_check == 'ok'
+      - (vaultwarden_standby_status_result.stdout | from_json).mode == 'passive'
+      - (vaultwarden_standby_status_result.stdout | from_json).last_sync_result == 'ok'
+      - (vaultwarden_standby_status_result.stdout | from_json).snapshot_age_seconds | int <= vaultwarden_standby_max_age_seconds | int
+      - (vaultwarden_standby_container_inspect.stdout | from_json)[0].State.Running == false
+      - (vaultwarden_standby_container_inspect.stdout | from_json)[0].State.Status in ['created', 'exited']
+      - (vaultwarden_standby_container_inspect.stdout | from_json)[0].HostConfig.RestartPolicy.Name in ['', 'no']
+      - (vaultwarden_standby_container_inspect.stdout | from_json)[0].HostConfig.Memory in [0, 134217728]
+      - (vaultwarden_standby_container_inspect.stdout | from_json)[0].HostConfig.NanoCpus == 500000000
+      - (vaultwarden_standby_container_inspect.stdout | from_json)[0].HostConfig.PortBindings['80/tcp'][0].HostIp == '127.0.0.1'
+      - (vaultwarden_standby_container_inspect.stdout | from_json)[0].HostConfig.PortBindings['80/tcp'][0].HostPort == app_port_vaultwarden_http | string
+      - (vaultwarden_standby_container_inspect.stdout | from_json)[0].HostConfig.PortBindings['3012/tcp'][0].HostIp == '127.0.0.1'
+      - (vaultwarden_standby_container_inspect.stdout | from_json)[0].HostConfig.PortBindings['3012/tcp'][0].HostPort == app_port_vaultwarden_ws | string
+      - (vaultwarden_standby_image_inspect.stdout | from_json)[0].Architecture == 'arm64'
+      - (vaultwarden_standby_sillytavern_inspect.stdout | from_json)[0].State.Running == true
+      - (vaultwarden_standby_sillytavern_inspect.stdout | from_json)[0].HostConfig.PortBindings['8000/tcp'][0].HostPort == '8000'
+    fail_msg: "Vaultwarden standby runtime contract is not satisfied"
+  when:
+    - vaultwarden_standby_mode == 'standby'
+    - not (vaultwarden_standby_snapshot_only | bool)
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Assert Vaultwarden snapshot-only standby runtime contract
+  ansible.builtin.assert:
+    that:
+      - (vaultwarden_standby_verify_result.stdout | from_json).sqlite_quick_check == 'ok'
+      - (vaultwarden_standby_status_result.stdout | from_json).mode == 'snapshot-only'
+      - (vaultwarden_standby_status_result.stdout | from_json).last_sync_result == 'ok'
+      - >-
+        (vaultwarden_standby_status_result.stdout | from_json).sync_source ==
+        (vaultwarden_standby_source_user ~ '@' ~ vaultwarden_standby_source_host ~ '::' ~ vaultwarden_standby_source_module ~ '/')
+      - (vaultwarden_standby_status_result.stdout | from_json).container_status == 'not_applicable'
+    fail_msg: "Vaultwarden snapshot-only standby runtime contract is not satisfied"
+  when:
+    - vaultwarden_standby_mode == 'standby'
+    - vaultwarden_standby_snapshot_only | bool
+  tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]

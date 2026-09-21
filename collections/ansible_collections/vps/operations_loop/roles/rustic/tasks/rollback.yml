@@ -1,0 +1,90 @@
+---
+- name: Roll back Rustic split scheduling without deleting backup data
+  tags: [rollback, operations_loop, rustic, rustic_rollback, phase7]
+  block:
+    - name: Gather systemd units before Rustic rollback
+      ansible.builtin.service_facts:
+      when: not ansible_check_mode
+
+    - name: Stop and disable split Rustic timers
+      become: true
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        enabled: false
+        state: stopped
+      loop:
+        - rustic-backup-local.timer
+        - rustic-backup-cloud.timer
+      when:
+        - not ansible_check_mode
+        - item in ansible_facts.services
+
+    - name: Wait for split Rustic services to finish
+      ansible.builtin.service_facts:
+      register: rustic_split_services_wait
+      changed_when: false
+      retries: 1440
+      delay: 5
+      until: >-
+        rustic_split_services_wait.ansible_facts.services.get(
+          'rustic-backup-local.service', {}
+        ).get('state', 'stopped') not in ['running', 'activating']
+        and rustic_split_services_wait.ansible_facts.services.get(
+          'rustic-backup-cloud.service', {}
+        ).get('state', 'stopped') not in ['running', 'activating']
+      when:
+        - not ansible_check_mode
+        - >-
+          'rustic-backup-local.service' in ansible_facts.services
+          or 'rustic-backup-cloud.service' in ansible_facts.services
+
+    - name: Remove split Rustic unit files
+      become: true
+      ansible.builtin.file:
+        path: "/etc/systemd/system/{{ item }}"
+        state: absent
+      loop:
+        - rustic-backup-local.service
+        - rustic-backup-local.timer
+        - rustic-backup-cloud.service
+        - rustic-backup-cloud.timer
+
+    - name: Restore legacy combined Rustic service
+      become: true
+      ansible.builtin.template:
+        src: rustic-backup.service.j2
+        dest: /etc/systemd/system/rustic-backup.service
+        owner: root
+        group: root
+        mode: "0644"
+      vars:
+        rustic_backup_mode: all
+        rustic_backup_service_timeout: "{{ rustic_cloud_service_timeout }}"
+
+    - name: Restore legacy combined Rustic timer
+      become: true
+      ansible.builtin.template:
+        src: rustic-backup-legacy.timer.j2
+        dest: /etc/systemd/system/rustic-backup.timer
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Reload systemd after Rustic rollback
+      become: true
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable the restored legacy Rustic timer
+      become: true
+      ansible.builtin.systemd:
+        name: rustic-backup.timer
+        enabled: true
+        state: started
+      when: not ansible_check_mode
+
+    - name: Report data-preserving Rustic rollback
+      ansible.builtin.debug:
+        msg: >-
+          Restored rustic-backup.service/timer. Preserved /etc/rustic,
+          /var/log/rustic, local repositories, and cloud repositories.

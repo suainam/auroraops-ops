@@ -1,0 +1,200 @@
+---
+- name: Probe Vaultwarden standby source dependencies
+  ansible.builtin.command:
+    argv:
+      - dpkg-query
+      - -W
+      - "-f=${db:Status-Abbrev} ${binary:Package}\\n"
+      - rsync
+      - sudo
+  register: vaultwarden_standby_source_packages
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Install missing Vaultwarden standby source dependencies
+  become: true
+  ansible.builtin.apt:
+    name:
+      - rsync
+      - sudo
+    state: present
+    update_cache: false
+  when: >-
+    vaultwarden_standby_source_packages.rc != 0
+    or vaultwarden_standby_source_packages.stdout_lines | select('match', '^ii ') | list | length != 2
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Check Vaultwarden snapshot source directory
+  become: true
+  ansible.builtin.stat:
+    path: "{{ vaultwarden_standby_source_snapshot_root }}"
+  register: vaultwarden_standby_source_snapshot_stat
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Validate Vaultwarden snapshot source prerequisite
+  ansible.builtin.assert:
+    that:
+      - vaultwarden_standby_source_snapshot_stat.stat.isdir | default(false)
+    fail_msg: "Vaultwarden snapshot source directory is unavailable"
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Probe standby service user on peer host
+  ansible.builtin.command:
+    argv:
+      - getent
+      - passwd
+      - "{{ vaultwarden_standby_service_user }}"
+  delegate_to: "{{ vaultwarden_standby_peer_inventory_host }}"
+  register: vaultwarden_standby_peer_service_user_probe
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Resolve peer enrollment ownership
+  ansible.builtin.set_fact:
+    vaultwarden_standby_peer_key_owner: >-
+      {{ vaultwarden_standby_service_user if vaultwarden_standby_peer_service_user_probe.rc == 0 else 'root' }}
+    vaultwarden_standby_peer_key_group: >-
+      {{ vaultwarden_standby_service_group if vaultwarden_standby_peer_service_user_probe.rc == 0 else 'root' }}
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Ensure standby enrollment directory exists on peer host
+  become: true
+  ansible.builtin.file:
+    path: "{{ vaultwarden_standby_config_dir }}"
+    state: directory
+    owner: "{{ vaultwarden_standby_peer_key_owner }}"
+    group: "{{ vaultwarden_standby_peer_key_group }}"
+    mode: "0700"
+  delegate_to: "{{ vaultwarden_standby_peer_inventory_host }}"
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Generate dedicated standby enrollment key on peer host
+  become: true
+  ansible.builtin.command:
+    argv:
+      - ssh-keygen
+      - -q
+      - -t
+      - ed25519
+      - -N
+      - ""
+      - -C
+      - "vaultwarden-standby@{{ vaultwarden_standby_peer_inventory_host }}"
+      - -f
+      - "{{ vaultwarden_standby_ssh_key }}"
+    creates: "{{ vaultwarden_standby_ssh_key }}"
+  delegate_to: "{{ vaultwarden_standby_peer_inventory_host }}"
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Check generated standby enrollment key on peer host
+  become: true
+  ansible.builtin.stat:
+    path: "{{ vaultwarden_standby_ssh_key }}.pub"
+  delegate_to: "{{ vaultwarden_standby_peer_inventory_host }}"
+  register: vaultwarden_standby_peer_public_key_stat
+  check_mode: false
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Enforce standby enrollment key permissions on peer host
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: "{{ vaultwarden_standby_peer_key_owner }}"
+    group: "{{ vaultwarden_standby_peer_key_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ vaultwarden_standby_ssh_key }}"
+      mode: "0600"
+    - path: "{{ vaultwarden_standby_ssh_key }}.pub"
+      mode: "0644"
+  delegate_to: "{{ vaultwarden_standby_peer_inventory_host }}"
+  when: vaultwarden_standby_peer_public_key_stat.stat.exists
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Read standby public key from peer host
+  become: true
+  ansible.builtin.slurp:
+    src: "{{ vaultwarden_standby_ssh_key }}.pub"
+  delegate_to: "{{ vaultwarden_standby_peer_inventory_host }}"
+  register: vaultwarden_standby_peer_public_key
+  when: vaultwarden_standby_peer_public_key_stat.stat.exists
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Resolve standby public key for deploy or check mode
+  ansible.builtin.set_fact:
+    vaultwarden_standby_peer_public_key_value: >-
+      {{
+        (vaultwarden_standby_peer_public_key.content | b64decode | trim)
+        if vaultwarden_standby_peer_public_key_stat.stat.exists
+        else 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICHECKMODEPLACEHOLDERONLY vaultwarden-standby-check-mode'
+      }}
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Create restricted Vaultwarden snapshot source user
+  become: true
+  ansible.builtin.user:
+    name: "{{ vaultwarden_standby_source_user }}"
+    home: "{{ vaultwarden_standby_source_user_home }}"
+    shell: /bin/dash
+    system: true
+    create_home: true
+    password_lock: true
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Lock restricted source user home ownership
+  become: true
+  ansible.builtin.file:
+    path: "{{ vaultwarden_standby_source_user_home }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Create restricted source SSH directory
+  become: true
+  ansible.builtin.file:
+    path: "{{ vaultwarden_standby_source_user_home }}/.ssh"
+    state: directory
+    owner: "{{ vaultwarden_standby_source_user }}"
+    group: "{{ vaultwarden_standby_source_user }}"
+    mode: "0700"
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Deploy read-only Vaultwarden snapshot rsync module
+  become: true
+  ansible.builtin.template:
+    src: rsyncd-vaultwarden-standby.conf.j2
+    dest: "{{ vaultwarden_standby_source_rsyncd_config }}"
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Allow only fixed read-only rsync daemon command through sudo
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ vaultwarden_standby_source_sudoers }}"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+    content: |
+      {{ vaultwarden_standby_source_user }} ALL=(root) NOPASSWD: /usr/bin/rsync --server --daemon --config={{ vaultwarden_standby_source_rsyncd_config }} .
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Enroll peer key with OpenSSH restrictions and fixed command
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ vaultwarden_standby_source_authorized_keys }}"
+    owner: "{{ vaultwarden_standby_source_user }}"
+    group: "{{ vaultwarden_standby_source_user }}"
+    mode: "0600"
+    content: >-
+      restrict,from="{{ vaultwarden_standby_peer_zerotier_ip }}",command="{{ vaultwarden_standby_source_fixed_command }}"
+      {{ vaultwarden_standby_peer_public_key_value }}
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]

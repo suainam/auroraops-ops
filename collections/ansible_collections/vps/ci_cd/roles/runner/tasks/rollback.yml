@@ -1,0 +1,9 @@
+---
+- name: Rollback github runner configuration
+  ansible.builtin.debug:
+    msg: "Rollback logic for runner role is not implemented yet. Manual intervention may be required if the user was deleted."
+  tags:
+    - rollback
+    - ci_cd
+    - runner
+    - phase9

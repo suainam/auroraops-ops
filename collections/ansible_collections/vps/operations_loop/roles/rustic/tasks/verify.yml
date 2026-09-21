@@ -1,0 +1,173 @@
+---
+- name: Preflight Rustic runtime capabilities for verification
+  ansible.builtin.import_tasks: preflight.yml
+  tags: [verify, operations_loop, rustic, rustic_preflight, phase7]
+
+- name: 验证 Rustic 备份配置
+  tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+  block:
+    - name: 检查 Rustic 安装
+      ansible.builtin.command: rustic --version
+      register: rustic_version
+      changed_when: false
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: 显示 Rustic 版本
+      ansible.builtin.debug:
+        msg: "Rustic version: {{ rustic_version.stdout }}"
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Read deployed Rustic script capabilities
+      become: true
+      ansible.builtin.command: /usr/local/bin/rustic_backup.py capabilities
+      register: rustic_deployed_capabilities_result
+      changed_when: false
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Parse deployed Rustic script capabilities
+      ansible.builtin.set_fact:
+        rustic_deployed_capabilities: >-
+          {{ rustic_deployed_capabilities_result.stdout | from_json }}
+      changed_when: false
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Assert deployed Rustic script supports split and evidence actions
+      ansible.builtin.assert:
+        that:
+          - rustic_deployed_capabilities.schema == 'auroraops.rustic-capabilities/v1'
+          - "'local' in rustic_deployed_capabilities.actions"
+          - "'cloud' in rustic_deployed_capabilities.actions"
+          - "'inspect' in rustic_deployed_capabilities.actions"
+          - "'restore-probe' in rustic_deployed_capabilities.actions"
+        fail_msg: Deployed Rustic script is stale or lacks lifecycle evidence actions
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: 验证所有仓库 (通过带环境和共享锁的 systemd service)
+      become: true
+      ansible.builtin.systemd_service:
+        name: rustic-check.service
+        state: started
+      register: rustic_verify
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: 显示仓库验证结果
+      ansible.builtin.debug:
+        msg: >-
+          rustic-check.service state={{
+            rustic_verify.status.ActiveState | default('completed')
+          }}
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Inspect identity-bound Rustic repository snapshots
+      become: true
+      no_log: true
+      ansible.builtin.shell: |
+        set -a
+        . /etc/rustic/backup.env
+        set +a
+        /usr/local/bin/rustic_backup.py inspect
+      args:
+        executable: /bin/bash
+      register: rustic_repository_inspection_result
+      changed_when: false
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Parse identity-bound Rustic repository snapshots
+      no_log: true
+      ansible.builtin.set_fact:
+        rustic_repository_inspection: >-
+          {{ rustic_repository_inspection_result.stdout | from_json }}
+      changed_when: false
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Assert every configured Rustic repository has readable snapshots
+      ansible.builtin.assert:
+        that:
+          - rustic_repository_inspection.repositories | length
+            == (rustic_runtime_required_remotes | length + 1)
+          - rustic_repository_inspection.repositories
+            | map(attribute='repository_id') | select | list | length
+            == rustic_repository_inspection.repositories | length
+          - rustic_repository_inspection.repositories
+            | map(attribute='snapshot_count') | map('int') | list | min > 0
+          - rustic_repository_inspection.repositories
+            | map(attribute='latest_snapshot_id') | select | list | length
+            == rustic_repository_inspection.repositories | length
+        fail_msg: One or more Rustic repositories lack identity-bound snapshot evidence
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Report safe Rustic repository evidence
+      ansible.builtin.debug:
+        msg: >-
+          repository_id={{ item.repository_id }}
+          latest_snapshot_id={{ item.latest_snapshot_id }}
+          latest_snapshot_time={{ item.latest_snapshot_time }}
+          snapshot_count={{ item.snapshot_count }}
+      loop: "{{ rustic_repository_inspection.repositories }}"
+      loop_control:
+        label: "{{ item.repository }}"
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Check split Rustic service files
+      ansible.builtin.stat:
+        path: "/etc/systemd/system/rustic-backup-{{ item }}.service"
+      loop:
+        - local
+        - cloud
+      register: rustic_split_service_files
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Assert split Rustic service files exist
+      ansible.builtin.assert:
+        that:
+          - rustic_split_service_files.results | map(attribute='stat.exists') | list | min
+        fail_msg: One or more split Rustic service files are missing
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Gather Rustic systemd unit state
+      ansible.builtin.service_facts:
+      register: rustic_verify_service_facts
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Query split Rustic timer states
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+      loop:
+        - rustic-backup-local.timer
+        - rustic-backup-cloud.timer
+      register: rustic_split_timer_query
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Check split Rustic timers
+      ansible.builtin.assert:
+        that:
+          - item.status.ActiveState == 'active'
+          - item.status.UnitFileState == 'enabled'
+        fail_msg: "{{ item.item }} must be active and enabled"
+      loop: "{{ rustic_split_timer_query.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Confirm legacy combined timer is absent
+      ansible.builtin.stat:
+        path: /etc/systemd/system/rustic-backup.timer
+      register: rustic_legacy_backup_timer
+      failed_when: rustic_legacy_backup_timer.stat.exists
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: 显示服务状态
+      ansible.builtin.debug:
+        msg: |
+          Split services: {{ rustic_split_service_files.results | map(attribute='stat.exists') | list }}
+          Split timers: {{ rustic_split_timer_query.results | map(attribute='status.ActiveState') | list }}
+          Check timer: {{ rustic_verify_service_facts.ansible_facts.services.get('rustic-check.timer', {}).get('state', 'N/A') }}
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+- name: Verify Rustic logrotate configuration
+  ansible.builtin.import_tasks: ../../../common/tasks/verify_optional_logrotate.yml
+  vars:
+    optional_logrotate_owner: Rustic
+    optional_logrotate_enabled: "{{ rustic_logrotate_enabled }}"
+    optional_logrotate_config_path: "{{ rustic_logrotate_config_path }}"
+  tags: [verify, operations_loop, rustic, rustic_verify_logrotate, phase7]

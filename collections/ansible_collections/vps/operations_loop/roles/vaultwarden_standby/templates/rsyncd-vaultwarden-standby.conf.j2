@@ -1,0 +1,14 @@
+uid = root
+gid = root
+use chroot = false
+read only = true
+list = false
+max connections = 2
+lock file = /run/lock/vaultwarden-standby-rsync.lock
+log file = /var/log/vaultwarden-standby-rsync.log
+
+[{{ vaultwarden_standby_source_module }}]
+path = {{ vaultwarden_standby_source_snapshot_root }}
+comment = Vaultwarden immutable recovery snapshots
+read only = true
+list = false

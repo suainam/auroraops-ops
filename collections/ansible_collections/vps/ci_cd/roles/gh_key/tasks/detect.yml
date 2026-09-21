@@ -1,0 +1,39 @@
+---
+# =============================================================================
+# Detect Existing GitHub SSH Configuration
+# =============================================================================
+
+- name: Test GitHub SSH connection
+  ansible.builtin.command: ssh -T -o StrictHostKeyChecking=accept-new git@github.com
+  register: gh_key_test_result
+  changed_when: false
+  failed_when: false
+  tags: [deploy, ci_cd, gh_key, gh_key_detect, phase9]
+
+- name: Set connection status fact
+  ansible.builtin.set_fact:
+    gh_key_connection_ok: "{{ 'successfully authenticated' in gh_key_test_result.stderr }}"
+  tags: [deploy, ci_cd, gh_key, gh_key_detect, phase9]
+
+- name: Display connection status
+  ansible.builtin.debug:
+    msg:
+      - "GitHub SSH Connection Status: {{ 'OK' if gh_key_connection_ok else 'FAILED' }}"
+      - "{{ gh_key_test_result.stderr if gh_key_test_result.stderr else 'No output' }}"
+  tags: [deploy, ci_cd, gh_key, gh_key_detect, phase9]
+
+- name: Check if SSH key exists
+  ansible.builtin.stat:
+    path: "{{ gh_key_path }}"
+  register: gh_key_file_stat
+  tags: [deploy, ci_cd, gh_key, gh_key_detect, phase9]
+
+- name: Set key exists fact
+  ansible.builtin.set_fact:
+    gh_key_exists: "{{ gh_key_file_stat.stat.exists }}"
+  tags: [deploy, ci_cd, gh_key, gh_key_detect, phase9]
+
+- name: Display key status
+  ansible.builtin.debug:
+    msg: "SSH key {{ gh_key_path }}: {{ 'EXISTS' if gh_key_exists else 'NOT FOUND' }}"
+  tags: [deploy, ci_cd, gh_key, gh_key_detect, phase9]

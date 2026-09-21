@@ -1,0 +1,105 @@
+---
+- name: Remove Vaultwarden standby source access files
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ vaultwarden_standby_source_authorized_keys }}"
+    - "{{ vaultwarden_standby_source_sudoers }}"
+    - "{{ vaultwarden_standby_source_rsyncd_config }}"
+  when: vaultwarden_standby_mode == 'source'
+  tags: [rollback, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Remove restricted Vaultwarden snapshot source user
+  become: true
+  ansible.builtin.user:
+    name: "{{ vaultwarden_standby_source_user }}"
+    state: absent
+    remove: false
+  when: vaultwarden_standby_mode == 'source'
+  tags: [rollback, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Check Vaultwarden standby timer unit before rollback
+  become: true
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ vaultwarden_standby_service_name }}.timer"
+  register: vaultwarden_standby_rollback_timer
+  when: vaultwarden_standby_mode == 'standby'
+  tags: [rollback, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Check Vaultwarden DR health timer unit before rollback
+  become: true
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ vaultwarden_standby_dr_health_service_name }}.timer"
+  register: vaultwarden_standby_rollback_health_timer
+  when: vaultwarden_standby_mode == 'standby'
+  tags: [rollback, operations_loop, vaultwarden_standby, vaultwarden_standby_dr, phase7]
+
+- name: Stop and disable Vaultwarden standby timer
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ vaultwarden_standby_service_name }}.timer"
+    enabled: false
+    state: stopped
+  when:
+    - vaultwarden_standby_mode == 'standby'
+    - vaultwarden_standby_rollback_timer.stat.exists | default(false)
+  tags: [rollback, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Stop and disable Vaultwarden DR health timer
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ vaultwarden_standby_dr_health_service_name }}.timer"
+    enabled: false
+    state: stopped
+  when:
+    - vaultwarden_standby_mode == 'standby'
+    - vaultwarden_standby_rollback_health_timer.stat.exists | default(false)
+  tags: [rollback, operations_loop, vaultwarden_standby, vaultwarden_standby_dr, phase7]
+
+- name: Remove Vaultwarden standby managed receiver files
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "/etc/systemd/system/{{ vaultwarden_standby_service_name }}.timer"
+    - "/etc/systemd/system/{{ vaultwarden_standby_service_name }}.service"
+    - "{{ vaultwarden_standby_script_path }}"
+    - "{{ vaultwarden_standby_dr_script_path }}"
+    - "/etc/systemd/system/{{ vaultwarden_standby_dr_health_service_name }}.timer"
+    - "/etc/systemd/system/{{ vaultwarden_standby_dr_health_service_name }}.service"
+    - "{{ vaultwarden_standby_known_hosts }}"
+  when: vaultwarden_standby_mode == 'standby'
+  tags: [rollback, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Reload systemd after Vaultwarden standby rollback
+  become: true
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: vaultwarden_standby_mode == 'standby'
+  tags: [rollback, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Remove Vaultwarden standby enrollment key only when requested
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ vaultwarden_standby_ssh_key }}"
+    - "{{ vaultwarden_standby_ssh_key }}.pub"
+  when:
+    - vaultwarden_standby_mode == 'standby'
+    - vaultwarden_standby_rollback_remove_key | bool
+  tags: [rollback, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Remove Vaultwarden standby recovery data only when requested
+  become: true
+  ansible.builtin.file:
+    path: "{{ vaultwarden_standby_root }}"
+    state: absent
+  when:
+    - vaultwarden_standby_mode == 'standby'
+    - vaultwarden_standby_rollback_remove_data | bool
+  tags: [rollback, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]

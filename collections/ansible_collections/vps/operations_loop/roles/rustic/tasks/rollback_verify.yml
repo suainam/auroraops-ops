@@ -1,0 +1,65 @@
+---
+- name: Check Rustic scheduling state after rollback
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ item }}"
+  loop:
+    - rustic-backup.service
+    - rustic-backup.timer
+    - rustic-backup-local.service
+    - rustic-backup-local.timer
+    - rustic-backup-cloud.service
+    - rustic-backup-cloud.timer
+  register: rustic_rollback_unit_files
+  tags: [rollback_verify, operations_loop, rustic, rustic_rollback_verify, phase7]
+
+- name: Assert Rustic legacy scheduling was restored
+  ansible.builtin.assert:
+    that:
+      - rustic_rollback_unit_files.results[0].stat.exists
+      - rustic_rollback_unit_files.results[1].stat.exists
+      - not rustic_rollback_unit_files.results[2].stat.exists
+      - not rustic_rollback_unit_files.results[3].stat.exists
+      - not rustic_rollback_unit_files.results[4].stat.exists
+      - not rustic_rollback_unit_files.results[5].stat.exists
+    fail_msg: Rustic rollback did not restore the legacy-only scheduling state
+  tags: [rollback_verify, operations_loop, rustic, rustic_rollback_verify, phase7]
+
+- name: Check Rustic protected assets after rollback
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /etc/rustic/backup.env
+    - /usr/local/bin/rustic_backup.py
+    - "{{ rustic_backup_base_dir }}/complete"
+  register: rustic_rollback_protected_assets
+  tags: [rollback_verify, operations_loop, rustic, rustic_rollback_verify, phase7]
+
+- name: Assert Rustic protected assets were preserved
+  ansible.builtin.assert:
+    that:
+      - rustic_rollback_protected_assets.results | map(attribute='stat.exists') | list | min
+    fail_msg: Rustic rollback removed configuration, script, or local repository data
+  tags: [rollback_verify, operations_loop, rustic, rustic_rollback_verify, phase7]
+
+- name: Observe restored Rustic legacy timer state
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - show
+      - rustic-backup.timer
+      - --property=LoadState
+      - --property=ActiveState
+      - --property=UnitFileState
+      - --no-pager
+  register: rustic_rollback_timer_state
+  changed_when: false
+  tags: [rollback_verify, operations_loop, rustic, rustic_rollback_verify, phase7]
+
+- name: Assert restored Rustic legacy timer is active and enabled
+  ansible.builtin.assert:
+    that:
+      - "'LoadState=loaded' in rustic_rollback_timer_state.stdout_lines"
+      - "'ActiveState=active' in rustic_rollback_timer_state.stdout_lines"
+      - "'UnitFileState=enabled' in rustic_rollback_timer_state.stdout_lines"
+    fail_msg: Restored Rustic legacy timer is not active and enabled
+  tags: [rollback_verify, operations_loop, rustic, rustic_rollback_verify, phase7]

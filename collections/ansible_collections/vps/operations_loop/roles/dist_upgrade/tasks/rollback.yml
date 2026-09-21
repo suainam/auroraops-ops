@@ -1,0 +1,34 @@
+---
+- name: 尝试回滚 APT 源配置
+  become: true
+  ansible.builtin.copy:
+    src: /etc/apt/sources.list.{{ dist_upgrade_current_dist }}.bak
+    dest: /etc/apt/sources.list
+    remote_src: true
+    mode: "0644"
+  when: dist_upgrade_backup_sources
+  register: dist_upgrade_restore_sources
+  notify: Refresh apt cache after dist-upgrade rollback
+  tags:
+    - rollback
+    - dist_upgrade_upgrade
+    - operations_loop
+    - dist_upgrade
+    - phase8
+- name: Flush apt cache refresh after restoring sources
+  ansible.builtin.meta: flush_handlers
+  tags:
+    - rollback
+    - dist_upgrade_upgrade
+    - operations_loop
+    - dist_upgrade
+    - phase8
+- name: 重大升级回滚提示
+  ansible.builtin.debug:
+    msg: "警告：已尝试恢复 APT 源配置。\n但是，'dist-upgrade' 执行的软件包升级和替换无法通过 Ansible 自动完全回滚。\n如果系统处于不稳定状态，请立即使用快照恢复！\n"
+  tags:
+    - rollback
+    - dist_upgrade_upgrade
+    - operations_loop
+    - dist_upgrade
+    - phase8

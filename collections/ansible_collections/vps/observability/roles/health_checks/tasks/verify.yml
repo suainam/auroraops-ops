@@ -1,0 +1,88 @@
+---
+- name: "[Health Checks] 验证 health_check_runner.py 脚本是否存在"
+  ansible.builtin.stat:
+    path: "/usr/local/bin/health_check_runner.py"
+  register: health_checks_script_stat
+  failed_when: not health_checks_script_stat.stat.exists
+  tags: [verify, observability, health_checks, phase6]
+
+- name: "[Health Checks] Gather systemd service facts"
+  ansible.builtin.service_facts:
+  register: health_checks_systemd_service_facts
+  tags: [verify, observability, health_checks, phase6]
+
+- name: "[Health Checks] Observe health_check_runner.timer state"
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - show
+      - health_check_runner.timer
+      - --property=LoadState
+      - --property=ActiveState
+      - --property=UnitFileState
+      - --no-pager
+  register: health_checks_runner_timer_state
+  changed_when: false
+  tags: [verify, observability, health_checks, phase6]
+
+- name: "[Health Checks] Verify health_check_runner timer state"
+  ansible.builtin.assert:
+    that:
+      - "'LoadState=loaded' in health_checks_runner_timer_state.stdout_lines"
+      - "'ActiveState=active' in health_checks_runner_timer_state.stdout_lines"
+      - "'UnitFileState=enabled' in health_checks_runner_timer_state.stdout_lines"
+    fail_msg: health_check_runner.timer must be loaded, active, and enabled
+  tags: [verify, observability, health_checks, phase6]
+
+- name: "[Health Checks] 验证 notifier.py 脚本是否存在"
+  ansible.builtin.stat:
+    path: "/usr/local/bin/notifier.py"
+  register: health_checks_notifier_script_stat
+  failed_when: not health_checks_notifier_script_stat.stat.exists
+  tags: [verify, observability, health_checks, phase6]
+
+- name: "[Health Checks] 验证 queue_processor.py 脚本是否存在"
+  ansible.builtin.stat:
+    path: "/usr/local/bin/queue_processor.py"
+  register: health_checks_queue_processor_script_stat
+  failed_when: not health_checks_queue_processor_script_stat.stat.exists
+  tags: [verify, observability, health_checks, phase6]
+
+- name: "[Health Checks] Check queue_processor.service is running"
+  ansible.builtin.assert:
+    that:
+      - "'queue_processor.service' in health_checks_systemd_service_facts.ansible_facts.services"
+      - health_checks_systemd_service_facts.ansible_facts.services['queue_processor.service'].state == 'running'
+    fail_msg: queue_processor.service must be running
+  tags: [verify, observability, health_checks, phase6]
+
+- name: "[Health Checks] Observe queue_processor.timer state"
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - show
+      - queue_processor.timer
+      - --property=LoadState
+      - --property=ActiveState
+      - --property=UnitFileState
+      - --no-pager
+  register: health_checks_queue_timer_state
+  changed_when: false
+  tags: [verify, observability, health_checks, phase6]
+
+- name: "[Health Checks] Verify queue_processor timer state"
+  ansible.builtin.assert:
+    that:
+      - "'LoadState=loaded' in health_checks_queue_timer_state.stdout_lines"
+      - "'ActiveState=active' in health_checks_queue_timer_state.stdout_lines"
+      - "'UnitFileState=enabled' in health_checks_queue_timer_state.stdout_lines"
+    fail_msg: queue_processor.timer must be loaded, active, and enabled
+  tags: [verify, observability, health_checks, phase6]
+
+- name: Verify Health Checks logrotate configuration
+  ansible.builtin.import_tasks: ../../../common/tasks/verify_optional_logrotate.yml
+  vars:
+    optional_logrotate_owner: Health Checks
+    optional_logrotate_enabled: "{{ health_checks_logrotate_enabled }}"
+    optional_logrotate_config_path: "{{ health_checks_logrotate_config_path }}"
+  tags: [verify, observability, health_checks, health_checks_verify_logrotate, phase6]

@@ -1,0 +1,3 @@
+---
+- name: Run systemd_priority rollback
+  ansible.builtin.import_tasks: tasks/rollback.yml

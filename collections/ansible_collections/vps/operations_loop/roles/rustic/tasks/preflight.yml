@@ -1,0 +1,148 @@
+---
+- name: Resolve Rustic rclone remotes required at runtime
+  ansible.builtin.set_fact:
+    rustic_runtime_required_remotes: >-
+      {{
+        (
+          (backup_cloud_remotes | default([]))
+          + (
+            [rustic_restore_source]
+            if (rustic_restore_mode | default(false) | bool)
+               and (rustic_restore_source | default('local')) != 'local'
+            else []
+          )
+        ) | unique | list
+      }}
+  changed_when: false
+  tags:
+    - deploy
+    - verify
+    - rollback
+    - operations_loop
+    - rustic
+    - rustic_preflight
+    - phase7
+
+- name: Locate rclone for Rustic
+  ansible.builtin.command: which rclone
+  register: rustic_rclone_command_check
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: rustic_runtime_required_remotes | length > 0
+  tags:
+    - deploy
+    - verify
+    - rollback
+    - operations_loop
+    - rustic
+    - rustic_preflight
+    - phase7
+
+- name: Assert rclone is available for Rustic
+  ansible.builtin.assert:
+    that:
+      - rustic_rclone_command_check.rc == 0
+    fail_msg: >-
+      Rustic cloud repositories require rclone.
+      Deploy personalization.rclone first.
+  when: rustic_runtime_required_remotes | length > 0
+  tags:
+    - deploy
+    - verify
+    - rollback
+    - operations_loop
+    - rustic
+    - rustic_preflight
+    - phase7
+
+- name: Check Rustic rclone configuration
+  become: true
+  ansible.builtin.stat:
+    path: "{{ rustic_rclone_config_path }}"
+  register: rustic_rclone_config_stat
+  when: rustic_runtime_required_remotes | length > 0
+  tags:
+    - deploy
+    - verify
+    - rollback
+    - operations_loop
+    - rustic
+    - rustic_preflight
+    - phase7
+
+- name: Assert Rustic rclone configuration exists
+  ansible.builtin.assert:
+    that:
+      - rustic_rclone_config_stat.stat.exists | default(false)
+    fail_msg: >-
+      Rustic requires {{ rustic_rclone_config_path }}.
+      Deploy personalization.rclone first.
+  when: rustic_runtime_required_remotes | length > 0
+  tags:
+    - deploy
+    - verify
+    - rollback
+    - operations_loop
+    - rustic
+    - rustic_preflight
+    - phase7
+
+- name: List rclone remotes for Rustic
+  become: true
+  ansible.builtin.command:
+    argv:
+      - "{{ rustic_rclone_command_check.stdout }}"
+      - listremotes
+      - --config
+      - "{{ rustic_rclone_config_path }}"
+  register: rustic_rclone_remotes_check
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: rustic_runtime_required_remotes | length > 0
+  tags:
+    - deploy
+    - verify
+    - rollback
+    - operations_loop
+    - rustic
+    - rustic_preflight
+    - phase7
+
+- name: Assert Rustic rclone configuration is readable
+  ansible.builtin.assert:
+    that:
+      - rustic_rclone_remotes_check.rc == 0
+    fail_msg: >-
+      Rustic could not read {{ rustic_rclone_config_path }} with rclone.
+      Deploy personalization.rclone first.
+  when: rustic_runtime_required_remotes | length > 0
+  tags:
+    - deploy
+    - verify
+    - rollback
+    - operations_loop
+    - rustic
+    - rustic_preflight
+    - phase7
+
+- name: Assert required rclone remotes exist for Rustic
+  ansible.builtin.assert:
+    that:
+      - item + ':' in rustic_rclone_remotes_check.stdout_lines
+    fail_msg: >-
+      Rustic requires rclone remote {{ item }} in
+      {{ rustic_rclone_config_path }}.
+  loop: "{{ rustic_runtime_required_remotes }}"
+  loop_control:
+    label: "{{ item }}"
+  when: rustic_runtime_required_remotes | length > 0
+  tags:
+    - deploy
+    - verify
+    - rollback
+    - operations_loop
+    - rustic
+    - rustic_preflight
+    - phase7

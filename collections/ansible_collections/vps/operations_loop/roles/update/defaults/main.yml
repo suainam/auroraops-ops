@@ -1,0 +1,28 @@
+---
+# APT 更新
+update_system_packages: true
+update_dist_upgrade: false
+update_autoremove: true
+update_reboot_if_required: false
+
+# Docker 镜像更新 (拉取已部署容器的最新镜像)
+update_docker_images: false
+
+# Node.js 全局包更新 (npm/bun)
+update_nodejs_packages: false
+
+# Python pip 可升级包报告 (仅报告，不执行)
+update_pip_report: true
+
+# Allow safe, focused reconciliation of Zinit units while the broader update
+# role remains disabled for a host.
+update_manage_zinit_units: false
+
+# 关键软件与系统版本建议
+update_recommended_postgresql_version: "18"
+update_recommended_redis_version: "7"
+update_latest_debian_release: "trixie"
+update_latest_debian_name: "Debian 13 (Trixie)"
+
+# 内核版本建议
+update_recommended_kernel_major: "6.12"

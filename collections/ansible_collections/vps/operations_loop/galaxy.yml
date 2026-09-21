@@ -1,0 +1,16 @@
+---
+namespace: vps
+name: operations_loop
+version: 1.1.0
+readme: README.md
+authors:
+  - suai
+description: Operational maintenance and backup roles collection
+license:
+  - MIT
+repository: https://github.com/suainam/AuroraOps
+tags:
+  - ansible
+  - infrastructure
+  - linux
+dependencies: {}

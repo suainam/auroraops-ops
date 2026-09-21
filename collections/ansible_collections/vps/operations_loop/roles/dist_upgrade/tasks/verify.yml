@@ -1,0 +1,89 @@
+---
+- name: 确保系统事实已收集
+  ansible.builtin.setup:
+    gather_subset:
+      - distribution
+  when: ansible_distribution_release is undefined
+  tags:
+    - verify
+    - operations_loop
+    - dist_upgrade
+    - phase8
+- name: 验证升级配置状态
+  ansible.builtin.assert:
+    that:
+      - dist_upgrade_confirm is defined
+    fail_msg: "dist_upgrade_confirm 未设置，请明确配置启用或禁用升级"
+  tags:
+    - verify
+    - dist_upgrade_check
+    - operations_loop
+    - dist_upgrade
+    - phase8
+- name: 验证升级后的系统版本
+  when: dist_upgrade_confirm | bool
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution_release == dist_upgrade_target_codename
+    fail_msg: "系统版本验证失败！预期: {{ dist_upgrade_target_codename }}, 实际: {{ ansible_distribution_release }}"
+  tags:
+    - verify
+    - dist_upgrade_verified
+    - operations_loop
+    - dist_upgrade
+    - phase8
+- name: 验证当前系统版本稳定（升级已禁用）
+  when: not (dist_upgrade_confirm | bool)
+  ansible.builtin.debug:
+    msg: "升级已禁用，当前 {{ ansible_distribution_release }} 版本符合预期"
+  tags:
+    - verify
+    - dist_upgrade_verified
+    - operations_loop
+    - dist_upgrade
+    - phase8
+- name: 验证系统连通性
+  ansible.builtin.ping:
+  tags:
+    - verify
+    - dist_upgrade_verified
+    - operations_loop
+    - dist_upgrade
+    - phase8
+- name: 检查关键服务状态
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+  loop:
+    - ssh
+  register: dist_upgrade_service_result
+  failed_when: dist_upgrade_service_result.status.ActiveState != 'active'
+  tags:
+    - verify
+    - dist_upgrade_verified
+    - operations_loop
+    - dist_upgrade
+    - phase8
+
+- name: 验证系统连通性
+  ansible.builtin.ping:
+  tags:
+    - verify
+    - dist_upgrade_upgrade
+    - operations_loop
+    - dist_upgrade
+    - phase8
+- name: 检查关键服务状态
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+  loop:
+    - ssh
+  register: dist_upgrade_service_result
+  failed_when: dist_upgrade_service_result.status.ActiveState != 'active'
+  tags:
+    - verify
+    - dist_upgrade_upgrade
+    - operations_loop
+    - dist_upgrade
+    - phase8

@@ -1,0 +1,81 @@
+---
+- name: 创建 Homer 暂存目录
+  ansible.builtin.file:
+    path: "{{ homer_portal_staging_dir }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+  run_once: true
+  tags: [deploy, observability, homer_portal, phase6]
+
+- name: 下载 Homer 发行版资产
+  ansible.builtin.get_url:
+    url: "{{ homer_portal_release_url }}"
+    dest: "{{ homer_portal_staging_dir }}/homer.zip"
+    mode: "0644"
+  delegate_to: localhost
+  run_once: true
+  tags: [deploy, observability, homer_portal, phase6]
+
+- name: 解压 Homer 静态资源
+  ansible.builtin.unarchive:
+    src: "{{ homer_portal_staging_dir }}/homer.zip"
+    dest: "{{ homer_portal_staging_dir }}"
+    remote_src: false
+  delegate_to: localhost
+  run_once: true
+  tags: [deploy, observability, homer_portal, phase6]
+
+- name: 部署 Homer 定制毛玻璃主题 custom.css
+  ansible.builtin.copy:
+    src: custom.css
+    dest: "{{ homer_portal_staging_dir }}/assets/custom.css"
+    mode: "0644"
+  delegate_to: localhost
+  run_once: true
+  tags: [deploy, observability, homer_portal, phase6]
+
+- name: 确保 index.html 引入 custom.css
+  ansible.builtin.lineinfile:
+    path: "{{ homer_portal_staging_dir }}/index.html"
+    insertbefore: '</head>'
+    line: '    <link rel="stylesheet" href="./assets/custom.css">'
+  delegate_to: localhost
+  run_once: true
+  tags: [deploy, observability, homer_portal, phase6]
+
+- name: 渲染 Homer 服务配置
+  ansible.builtin.template:
+    src: config.yml.j2
+    dest: "{{ homer_portal_staging_dir }}/assets/config.yml"
+    mode: "0644"
+  delegate_to: localhost
+  run_once: true
+  tags: [deploy, observability, homer_portal, phase6]
+
+- name: 部署 Homer 门户到 Cloudflare Pages
+  ansible.builtin.command:
+    argv:
+      - bunx
+      - wrangler
+      - pages
+      - deploy
+      - "{{ homer_portal_staging_dir }}"
+      - --project-name
+      - "{{ homer_portal_project_name }}"
+      - --branch
+      - main
+      - --commit-dirty=true
+  register: homer_portal_deploy_result
+  delegate_to: localhost
+  run_once: true
+  when: not ansible_check_mode
+  changed_when: true
+  tags: [deploy, observability, homer_portal, phase6]
+
+- name: 输出 Cloudflare Pages 部署结果
+  ansible.builtin.debug:
+    msg: "Homer portal successfully deployed to https://{{ homer_portal_project_name }}.pages.dev"
+  delegate_to: localhost
+  run_once: true
+  tags: [deploy, observability, homer_portal, phase6]

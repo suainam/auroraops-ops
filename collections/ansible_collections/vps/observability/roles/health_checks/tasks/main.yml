@@ -1,0 +1,296 @@
+---
+- name: 角色启用检查
+  ansible.builtin.debug:
+    msg: Role health_checks is disabled, skipping
+  when: not (auroraops_roles['observability']['health_checks'] | default(true) | bool)
+  tags:
+    - deploy
+    - observability
+    - health_checks
+    - phase6
+- name: 角色已启用，执行 Health Checks 任务
+  ansible.builtin.debug:
+    msg: Executing health_checks role tasks
+  when: auroraops_roles['observability']['health_checks'] | default(true) | bool
+  tags:
+    - deploy
+    - observability
+    - health_checks
+    - phase6
+- name: 合并 Health Checks 监控服务列表
+  ansible.builtin.include_tasks: ../../../common/tasks/merge_list_vars.yml
+  vars:
+    merge_var_name: health_checks_services
+  when: auroraops_roles['observability']['health_checks'] | default(true) | bool
+  tags:
+    - deploy
+    - observability
+    - health_checks
+    - health_checks_deploy_runner_script
+    - phase6
+- name: 合并 Health Checks 自愈服务列表
+  ansible.builtin.include_tasks: ../../../common/tasks/merge_list_vars.yml
+  vars:
+    merge_var_name: health_checks_healing_services
+  when: auroraops_roles['observability']['health_checks'] | default(true) | bool
+  tags:
+    - deploy
+    - observability
+    - health_checks
+    - health_checks_deploy_runner_script
+    - phase6
+- name: 确保必要的软件包已安装 (apt-get workaround for Mitogen)
+  become: true
+  ansible.builtin.shell:
+    cmd: >-
+      DEBIAN_FRONTEND=noninteractive apt-get update &&
+      DEBIAN_FRONTEND=noninteractive apt-get install -y
+      -o Dpkg::Options::="--force-confdef"
+      -o Dpkg::Options::="--force-confold"
+      jq curl redis-tools python3-venv sysstat lsof procps bc
+  environment:
+    http_proxy: "{{ proxy_http | default('') }}"
+    https_proxy: "{{ proxy_https | default('') }}"
+    HTTP_PROXY: "{{ proxy_http | default('') }}"
+    HTTPS_PROXY: "{{ proxy_https | default('') }}"
+  register: health_checks_apt_install_result
+  changed_when: "'is already the newest version' not in health_checks_apt_install_result.stdout"
+  when: auroraops_roles['observability']['health_checks'] | default(true) | bool
+  tags:
+    - deploy
+    - phase6
+    - observability
+    - health_checks
+    - health_checks_install_dependencies
+- name: 确保必要的目录存在
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: '{{ item.mode | default("0755") }}'
+    owner: '{{ item.owner | default("root") }}'
+    group: '{{ item.group | default("root") }}'
+  loop:
+    - path: /var/log/health_checks
+      group: adm
+    - path: /var/lib/health_checks
+    - path: /etc/health_checks
+  when: auroraops_roles['observability']['health_checks'] | default(true) | bool
+  tags:
+    - deploy
+    - phase6
+    - observability
+    - health_checks
+    - health_checks_create_directories
+- name: 部署 health_check_runner.py 脚本
+  become: true
+  ansible.builtin.template:
+    src: health_check_runner.py.j2
+    dest: /usr/local/bin/health_check_runner.py
+    mode: "0755"
+    owner: root
+    group: root
+    force: true
+  notify:
+    - restart health_check_runner timer
+  when: auroraops_roles['observability']['health_checks'] | default(true) | bool
+  tags:
+    - deploy
+    - phase6
+    - observability
+    - health_checks
+    - health_checks_deploy_runner_script
+- name: 移除旧的 health_check_runner.sh 脚本
+  become: true
+  ansible.builtin.file:
+    path: /usr/local/bin/health_check_runner.sh
+    state: absent
+  when: auroraops_roles['observability']['health_checks'] | default(true) | bool
+  tags:
+    - deploy
+    - phase6
+    - observability
+    - health_checks
+    - health_checks_cleanup_old_runner
+- name: 部署健康检查环境变量配置
+  no_log: true
+  diff: false
+  become: true
+  ansible.builtin.template:
+    src: health_checks.env.j2
+    dest: /etc/health_checks/health_checks.env
+    mode: "0600"
+  when: auroraops_roles['observability']['health_checks'] | default(true) | bool
+  tags:
+    - deploy
+    - phase6
+    - observability
+    - health_checks
+    - health_checks_deploy_env_config
+- name: 清理旧的变量脚本和虚拟环境
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/health_checks/notifier_vars.sh
+    - /etc/health_checks/queue_processor_vars.sh
+    - /opt/health_checks_venv
+  when: auroraops_roles['observability']['health_checks'] | default(true) | bool
+  tags:
+    - deploy
+    - phase6
+    - observability
+    - health_checks
+    - health_checks_cleanup_old_artifacts
+- name: 部署 notifier.py 脚本
+  become: true
+  ansible.builtin.copy:
+    src: notifier.py
+    dest: /usr/local/bin/notifier.py
+    mode: "0755"
+    force: true
+  when: auroraops_roles['observability']['health_checks'] | default(true) | bool
+  tags:
+    - deploy
+    - phase6
+    - observability
+    - health_checks
+    - health_checks_deploy_notifier_script
+- name: 确保健康检查所需的 Python 依赖已安装
+  become: true
+  ansible.builtin.pip:
+    name:
+      - redis
+      - requests
+    executable: "{{ health_checks_python_interpreter_path | replace('python3', 'pip') | replace('python', 'pip') }}"
+    state: present
+  environment:
+    http_proxy: "{{ proxy_http | default('') }}"
+    https_proxy: "{{ proxy_https | default('') }}"
+  when: auroraops_roles['observability']['health_checks'] | default(true) | bool
+  tags:
+    - deploy
+    - phase6
+    - observability
+    - health_checks
+- name: 验证依赖是否成功安装
+  become: true
+  tags: [deploy, observability, health_checks, phase6]
+  ansible.builtin.command: "{{ health_checks_python_interpreter_path }} -c 'import redis, requests'"
+  changed_when: false
+  register: health_checks_dep_check
+  failed_when: health_checks_dep_check.rc != 0
+- name: 将 Health Checks 日志纳入 logrotate 管理
+  ansible.builtin.import_tasks: ../../../common/tasks/manage_optional_logrotate.yml
+  vars:
+    optional_logrotate_owner: Health Checks
+    optional_logrotate_enabled: "{{ health_checks_logrotate_enabled }}"
+    optional_logrotate_config_path: "{{ health_checks_logrotate_config_path }}"
+    optional_logrotate_config: "{{ health_checks_logrotate_config }}"
+  when: auroraops_roles['observability']['health_checks'] | default(true) | bool
+  tags:
+    - deploy
+    - phase6
+    - observability
+    - health_checks
+    - health_checks_logrotate
+- name: 部署 queue_processor.py 脚本
+  become: true
+  ansible.builtin.copy:
+    src: queue_processor.py
+    dest: /usr/local/bin/queue_processor.py
+    mode: "0755"
+  when: auroraops_roles['observability']['health_checks'] | default(true) | bool
+  tags:
+    - deploy
+    - phase6
+    - observability
+    - health_checks
+    - health_checks_deploy_queue_processor_script
+- name: 确保旧的 notifier.service 文件被移除
+  become: true
+  ansible.builtin.file:
+    path: /etc/systemd/system/notifier.service
+    state: absent
+  when: auroraops_roles['observability']['health_checks'] | default(true) | bool
+  tags:
+    - deploy
+    - phase6
+    - observability
+    - health_checks
+    - health_checks_cleanup_obsolete_service
+- name: 部署 health_check_runner 服务
+  ansible.builtin.include_role:
+    name: vps.applications.application_service
+  vars:
+    app_service_name: health_check_runner
+    app_service_description: Health Check Runner
+    app_service_type: oneshot
+    app_service_exec_start: /bin/bash -c '/usr/local/bin/health_check_runner.py | {{ health_checks_python_interpreter_path }} /usr/local/bin/notifier.py'
+    app_service_user: root
+    app_service_group: root
+    app_service_working_directory: /var/lib/health_checks
+    app_service_environment_file: /etc/health_checks/health_checks.env
+    app_service_enabled: true
+    app_service_state: stopped
+  when: auroraops_roles['observability']['health_checks'] | default(true) | bool
+  tags:
+    - deploy
+    - phase6
+    - observability
+    - health_checks
+    - health_checks_runner_service
+- name: 部署 health_check_runner 定时器
+  ansible.builtin.include_role:
+    name: vps.applications.application_timer
+  vars:
+    app_timer_name: health_check_runner
+    app_timer_description: Timer for Health Check Runner
+    app_timer_on_calendar: "*-*-* {{ health_checks_schedule_hours }}"
+    app_timer_persistent: true
+  when: auroraops_roles['observability']['health_checks'] | default(true) | bool
+  tags:
+    - deploy
+    - phase6
+    - observability
+    - health_checks
+    - health_checks_runner_timer
+- name: 部署 queue_processor 服务
+  ansible.builtin.include_role:
+    name: vps.applications.application_service
+  vars:
+    app_service_name: queue_processor
+    app_service_description: Health Check Queue Processor
+    app_service_type: simple
+    app_service_exec_start: "{{ health_checks_python_interpreter_path }} /usr/local/bin/queue_processor.py"
+    app_service_user: root
+    app_service_group: root
+    app_service_working_directory: /var/lib/health_checks
+    app_service_environment_file: /etc/health_checks/health_checks.env
+    app_service_dependencies:
+      - redis-server.service
+    app_service_enabled: true
+    app_service_state: started
+  when: auroraops_roles['observability']['health_checks'] | default(true) | bool
+  tags:
+    - deploy
+    - phase6
+    - observability
+    - health_checks
+    - health_checks_queue_service
+- name: 部署 queue_processor 定时器
+  ansible.builtin.include_role:
+    name: vps.applications.application_timer
+  vars:
+    app_timer_name: queue_processor
+    app_timer_description: Timer for Health Check Queue Processor
+    app_timer_on_calendar: "{{ health_checks_queue_on_calendar }}"
+    app_timer_persistent: true
+  when: auroraops_roles['observability']['health_checks'] | default(true) | bool
+  tags:
+    - deploy
+    - phase6
+    - observability
+    - health_checks
+    - health_checks_queue_timer

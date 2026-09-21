@@ -1,0 +1,7 @@
+# {mark} ANSIBLE MANAGED - GitHub Deploy Key
+Host {{ gh_key_ssh_host }}
+    HostName {{ gh_key_ssh_host }}
+    User {{ gh_key_ssh_user }}
+    IdentityFile {{ gh_key_path }}
+    StrictHostKeyChecking accept-new
+    IdentitiesOnly yes

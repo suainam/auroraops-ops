@@ -1,0 +1,263 @@
+---
+- name: 部署 Rustic 备份服务
+  tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+  block:
+    - name: Gather systemd units before Rustic migration
+      ansible.builtin.service_facts:
+      tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+    - name: Preserve pre-migration Rustic unit state
+      ansible.builtin.set_fact:
+        rustic_pre_migration_services: "{{ ansible_facts.services }}"
+      tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+    - name: Stop the legacy combined Rustic backup timer before migration
+      become: true
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        enabled: false
+        state: stopped
+      loop:
+        - rustic-backup.timer
+      when:
+        - not ansible_check_mode
+        - item in rustic_pre_migration_services
+      tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+    - name: Wait for all legacy Rustic services to finish
+      ansible.builtin.service_facts:
+      register: rustic_legacy_services_wait
+      changed_when: false
+      retries: 1440
+      delay: 5
+      until: >-
+        rustic_legacy_services_wait.ansible_facts.services.get(
+          'rustic-backup.service', {}
+        ).get('state', 'stopped') not in ['running', 'activating']
+      when:
+        - not ansible_check_mode
+        - "'rustic-backup.service' in rustic_pre_migration_services"
+      tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+    - name: 创建 /etc/rustic 目录并限制权限
+      ansible.builtin.file:
+        path: /etc/rustic
+        state: directory
+        mode: '0700'
+        owner: root
+        group: root
+      tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+    - name: 创建日志目录
+      ansible.builtin.file:
+        path: /var/log/rustic
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+      tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+    - name: 创建 Rustic 运行状态目录
+      ansible.builtin.file:
+        path: "{{ rustic_cleanup_success_marker | dirname }}"
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+      tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+    - name: 创建 /etc/rustic 目录并限制权限
+      ansible.builtin.file:
+        path: /etc/rustic
+        state: directory
+        mode: '0700'
+        owner: root
+        group: root
+      tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+    - name: 从 backup_exclude_paths 生成排除规则
+      ansible.builtin.copy:
+        content: |
+          {% for pattern in backup_exclude_paths %}
+          {# 将 **/pattern/** 转换为 !**/pattern 格式 #}
+          {% if pattern.startswith('**/') and pattern.endswith('/**') %}
+          !{{ pattern[:-2] }}
+          {% elif pattern.startswith('**/') %}
+          !{{ pattern[3:] }}
+          {% else %}
+          !{{ pattern }}
+          {% endif %}
+          {% endfor %}
+        dest: /etc/rustic/exclude.txt
+        mode: '0644'
+        owner: root
+        group: root
+      when: backup_exclude_paths is defined and backup_exclude_paths | length > 0
+      changed_when: false
+      tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+    - name: 部署备份脚本到 /usr/local/bin
+      ansible.builtin.copy:
+        src: rustic_backup.py
+        dest: /usr/local/bin/rustic_backup.py
+        mode: '0755'
+        owner: root
+        group: root
+      changed_when: false
+      tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+    - name: 部署 Rustic 配置文件
+      no_log: true
+      ansible.builtin.template:
+        src: rustic.toml.j2
+        dest: /etc/rustic/rustic.toml
+        mode: '0600'
+        owner: root
+        group: root
+      tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+    - name: 部署密码文件
+      no_log: true
+      ansible.builtin.copy:
+        content: "{{ vault_rustic_password }}"
+        dest: "{{ rustic_password_file | default('/etc/rustic/password.txt') }}"
+        mode: '0600'
+        owner: root
+        group: root
+      tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+    - name: 部署备份环境变量文件
+      no_log: true
+      diff: false
+      ansible.builtin.template:
+        src: backup.env.j2
+        dest: /etc/rustic/backup.env
+        mode: '0600'
+        owner: root
+        group: root
+      tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+    - name: Deploy split Rustic backup services
+      become: true
+      ansible.builtin.template:
+        src: rustic-backup.service.j2
+        dest: "/etc/systemd/system/rustic-backup-{{ item.mode }}.service"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - mode: local
+          timeout: "{{ rustic_local_service_timeout }}"
+        - mode: cloud
+          timeout: "{{ rustic_cloud_service_timeout }}"
+      vars:
+        rustic_backup_mode: "{{ item.mode }}"
+        rustic_backup_service_timeout: "{{ item.timeout }}"
+      tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+    - name: Deploy split Rustic backup timers
+      become: true
+      ansible.builtin.template:
+        src: rustic-backup.timer.j2
+        dest: "/etc/systemd/system/rustic-backup-{{ item.mode }}.timer"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - mode: local
+          calendar: "{{ rustic_local_backup_timer_calendar }}"
+          delay: "0"
+        - mode: cloud
+          calendar: "{{ rustic_cloud_backup_timer_calendar }}"
+          delay: "15m"
+      vars:
+        rustic_backup_mode: "{{ item.mode }}"
+        rustic_backup_calendar: "{{ item.calendar }}"
+        rustic_backup_randomized_delay: "{{ item.delay }}"
+      tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+    - name: Reload systemd for split Rustic units
+      become: true
+      ansible.builtin.systemd:
+        daemon_reload: true
+      tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+    - name: Enable split Rustic backup timers
+      become: true
+      ansible.builtin.systemd:
+        name: "rustic-backup-{{ item }}.timer"
+        enabled: true
+        state: started
+      loop:
+        - local
+        - cloud
+      when: not ansible_check_mode
+      tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+    - name: 部署 Rustic 健康检查服务
+      become: true
+      ansible.builtin.template:
+        src: rustic-backup.service.j2
+        dest: /etc/systemd/system/rustic-check.service
+        owner: root
+        group: root
+        mode: "0644"
+      vars:
+        rustic_backup_mode: check
+        rustic_backup_service_timeout: "{{ rustic_cloud_service_timeout }}"
+        rustic_service_description: Rustic Repository Health Check
+      when: rustic_health_check_enabled | default(true)
+      tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+    - name: 部署 Rustic 健康检查定时器
+      ansible.builtin.include_role:
+        name: vps.applications.application_timer
+      vars:
+        app_timer_name: rustic-check
+        app_timer_description: Rustic Repository Health Check Timer
+        app_timer_on_calendar: "{{ rustic_check_timer_calendar }}"
+        app_timer_persistent: false
+        application_timer_app_timer_persistent: false
+        app_timer_randomized_delay: 1h
+      when: rustic_health_check_enabled | default(true)
+      tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+  rescue:
+    - name: Gather systemd units after failed Rustic migration
+      ansible.builtin.service_facts:
+
+    - name: Stop split Rustic timers after a failed migration
+      become: true
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        enabled: false
+        state: stopped
+      loop:
+        - rustic-backup-local.timer
+        - rustic-backup-cloud.timer
+      when: item in ansible_facts.services
+
+    - name: Reload systemd before restoring legacy Rustic timers
+      become: true
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Restore Rustic timers that were enabled before migration
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - rustic-backup.timer
+        - rustic-backup-local.timer
+        - rustic-backup-cloud.timer
+      when:
+        - item in rustic_pre_migration_services
+        - rustic_pre_migration_services[item].status == 'enabled'
+
+    - name: Fail after restoring the previous Rustic schedule
+      ansible.builtin.fail:
+        msg: >-
+          Rustic migration failed; the timer schedule that was enabled before
+          migration was restored.

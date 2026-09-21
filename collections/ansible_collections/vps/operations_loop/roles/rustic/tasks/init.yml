@@ -1,0 +1,50 @@
+---
+- name: 初始化 Rustic 仓库
+  when: auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+  tags: [deploy, operations_loop, rustic, rustic_init, phase7]
+  block:
+    - name: 创建本地备份目录
+      ansible.builtin.file:
+        path: "{{ backup_base_dir }}/complete"
+        state: directory
+        mode: "0755"
+        owner: root
+        group: root
+      changed_when: false
+      tags: [deploy, operations_loop, rustic, rustic_init, phase7]
+
+    - name: 初始化本地仓库 (如果不存在)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export RUSTIC_PASSWORD="{{ vault_rustic_password }}"
+        repo="{{ backup_base_dir }}/complete"
+        if ! rustic -r "${repo}" cat config > /dev/null 2>&1; then
+          echo "Initializing local repository at ${repo}..."
+          rustic init --repo "${repo}"
+        else
+          echo "Local repository already exists"
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      tags: [deploy, operations_loop, rustic, rustic_init, phase7]
+
+    - name: 初始化云端仓库 (如果不存在)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export RUSTIC_PASSWORD="{{ vault_rustic_password }}"
+        export HTTP_PROXY="{{ proxy_http | default('') }}"
+        export HTTPS_PROXY="{{ proxy_https | default('') }}"
+        for remote in {{ backup_cloud_remotes | join(' ') }}; do
+          repo="rclone:${remote}:{{ backup_cloud_prefix }}/complete"
+          if ! rustic -r "${repo}" cat config > /dev/null 2>&1; then
+            echo "Initializing ${repo}..."
+            rustic init --repo "${repo}" || echo "Failed: ${repo}"
+          else
+            echo "Repository already exists: ${remote}"
+          fi
+        done
+      args:
+        executable: /bin/bash
+      changed_when: false
+      tags: [deploy, operations_loop, rustic, rustic_init, phase7]

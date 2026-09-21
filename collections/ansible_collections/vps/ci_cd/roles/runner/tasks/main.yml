@@ -1,0 +1,26 @@
+---
+- name: Ensure runner home directory exists
+  become: true
+  ansible.builtin.file:
+    path: "{{ runner_github_runner_home }}"
+    state: directory
+    owner: "{{ runner_github_runner_user }}"
+    group: "{{ runner_github_runner_group }}"
+    mode: "0755"
+
+  tags: &id001
+    - deploy
+    - ci_cd
+    - runner
+    - phase9
+- name: Check runner service status
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ runner_github_runner_service_name }}"
+    state: started
+    enabled: true
+  register: runner_service_start
+  failed_when:
+    - runner_service_start.failed | default(false)
+    - "'Could not find the requested service' not in (runner_service_start.msg | default(''))"
+  tags: *id001

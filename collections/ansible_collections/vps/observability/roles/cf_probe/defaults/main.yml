@@ -1,0 +1,34 @@
+---
+cf_probe_enabled: false
+cf_probe_version: "v1.0.15"
+cf_probe_install_dir: "/usr/local/bin"
+cf_probe_config_dir: "/etc/config/cf-probe"
+cf_probe_config_file: "/etc/config/cf-probe/config.conf"
+cf_probe_environment: {}
+cf_probe_service_mgr: "{{ ansible_service_mgr | default('openrc' if (ansible_os_family | default('')) == 'Alpine' else 'systemd') }}"
+cf_probe_arch_map:
+  x86_64: "amd64"
+  amd64: "amd64"
+  aarch64: "arm64"
+  arm64: "arm64"
+  armv7l: "arm"
+
+cf_probe_arch: "{{ cf_probe_arch_map[ansible_architecture | default('amd64')] | default('amd64') }}"
+cf_probe_download_url: "https://github.com/huilang-me/cfsm-agent/releases/download/{{ cf_probe_version }}/cf-probe-linux-{{ cf_probe_arch }}"
+
+cf_probe_worker_url: "https://cf-server-monitor.suainam.workers.dev/update"
+cf_probe_secret: "{{ vault_cf_server_monitor_api_secret | default(cf_server_monitor_api_secret | default('')) }}"
+cf_probe_server_id: ""
+
+cf_probe_collect_interval: 2
+cf_probe_report_interval: 60
+cf_probe_ct_node: "gd-ct-dualstack.ip.zstaticcdn.com"
+cf_probe_cu_node: "gd-cu-dualstack.ip.zstaticcdn.com"
+cf_probe_cm_node: "gd-cm-dualstack.ip.zstaticcdn.com"
+cf_probe_bd_node: ""
+cf_probe_interface: ""
+cf_probe_reset_day: 1
+cf_probe_connection_mode: "auto"
+cf_probe_ping_mode: "tcp"
+cf_probe_auto_update: 0
+cf_probe_debug: 0

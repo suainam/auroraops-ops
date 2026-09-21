@@ -1,0 +1,82 @@
+---
+- name: 角色启用检查
+  ansible.builtin.debug:
+    msg: "Role rustic is disabled, skipping"
+  when: not (auroraops_roles['operations_loop']['rustic'] | default(true) | bool)
+  tags: [deploy, operations_loop, rustic, phase7]
+
+- name: 角色已启用，执行 Rustic 任务
+  ansible.builtin.debug:
+    msg: "Executing rustic role tasks. Restore mode: {{ rustic_restore_mode | default('UNDEFINED') }}"
+  when: auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+  tags: [deploy, operations_loop, rustic, phase7]
+
+- name: Observe the current Rustic deployment baseline
+  ansible.builtin.import_tasks: observe.yml
+  when:
+    - auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+    - rustic_observe_baseline_mode | bool
+  tags: [deploy, operations_loop, rustic, rustic_observe_baseline, phase7]
+
+- name: Preflight Rustic runtime capabilities
+  ansible.builtin.import_tasks: preflight.yml
+  when: auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+  tags: [deploy, operations_loop, rustic, rustic_preflight, phase7]
+
+- name: 包含安装任务
+  ansible.builtin.include_tasks:
+    file: install.yml
+  when: auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+  tags: [deploy, operations_loop, rustic, rustic_install, phase7]
+
+- name: 包含初始化任务
+  ansible.builtin.include_tasks:
+    file: init.yml
+  when: auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+  tags: [deploy, operations_loop, rustic, rustic_init, phase7]
+
+- name: 包含部署任务
+  ansible.builtin.include_tasks:
+    file: deploy.yml
+  when: auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+  tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+- name: Configure Rustic logrotate independently
+  ansible.builtin.import_tasks: ../../../common/tasks/manage_optional_logrotate.yml
+  vars:
+    optional_logrotate_owner: Rustic
+    optional_logrotate_enabled: "{{ rustic_logrotate_enabled }}"
+    optional_logrotate_config_path: "{{ rustic_logrotate_config_path }}"
+    optional_logrotate_config: "{{ rustic_logrotate_config }}"
+  when: auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+  tags: [deploy, operations_loop, rustic, rustic_logrotate, phase7]
+
+- name: 包含清理任务
+  ansible.builtin.include_tasks:
+    file: cleanup.yml
+  when:
+    - auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+    - rustic_manage_units | bool
+  tags: [deploy, operations_loop, rustic, rustic_cleanup, phase7]
+
+- name: Finalize Rustic migration after all split units are active
+  ansible.builtin.include_tasks:
+    file: finalize.yml
+  when: auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+  tags: [deploy, operations_loop, rustic, rustic_finalize, phase7]
+
+- name: 包含恢复任务
+  ansible.builtin.include_tasks:
+    file: restore.yml
+  when:
+    - auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+    - rustic_restore_mode | default(false) | bool
+  tags: [restore, operations_loop, rustic, rustic_restore, phase7]
+
+- name: Run the isolated Rustic recovery probe
+  ansible.builtin.include_tasks:
+    file: recovery_probe.yml
+  when:
+    - auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+    - rustic_recovery_probe_mode | bool
+  tags: [deploy, operations_loop, rustic, rustic_recovery_probe, phase7]

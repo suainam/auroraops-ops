@@ -1,0 +1,29 @@
+---
+- name: Check specific workflow files
+  ansible.builtin.stat:
+    path: "{{ playbook_dir }}/../../{{ workflow_github_workflows_dir }}/{{ item.name }}"
+  vars:
+    ansible_become: false
+  loop: "{{ workflow_github_workflows_to_deploy }}"
+  register: workflow_file_stats
+  delegate_to: localhost
+  run_once: true
+  become: false
+
+  tags: &id001
+    - verify
+    - ci_cd
+    - workflow
+    - phase9
+- name: Verify specific workflow files exist
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+    fail_msg: "Workflow file {{ item.item.name }} is missing!"
+  vars:
+    ansible_become: false
+  loop: "{{ workflow_file_stats.results }}"
+  delegate_to: localhost
+  run_once: true
+  become: false
+  tags: *id001

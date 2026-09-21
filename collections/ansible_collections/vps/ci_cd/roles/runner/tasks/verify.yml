@@ -1,0 +1,19 @@
+---
+- name: Verify runner service is running
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ runner_github_runner_service_name }}"
+  register: runner_service_status
+  failed_when: runner_service_status.status.ActiveState != 'active'
+
+  tags: &id001
+    - verify
+    - ci_cd
+    - runner
+    - phase9
+- name: Verify runner home directory exists
+  ansible.builtin.stat:
+    path: "{{ runner_github_runner_home }}"
+  register: runner_home_stat
+  failed_when: not runner_home_stat.stat.exists or not runner_home_stat.stat.isdir
+  tags: *id001

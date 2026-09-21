@@ -1,0 +1,28 @@
+---
+- name: 停止并移除监控栈容器
+  become: true
+  community.docker.docker_compose_v2:
+    project_src: "{{ monitoring_stack_dir }}"
+    state: absent
+  register: monitoring_stack_rollback_cleanup
+  failed_when: >-
+    monitoring_stack_rollback_cleanup.failed | default(false) and
+    'Cannot connect to the Docker daemon' not in monitoring_stack_rollback_cleanup.msg | default('') and
+    'No such file or directory' not in monitoring_stack_rollback_cleanup.msg | default('')
+  tags:
+    - rollback
+    - observability
+    - monitoring_stack_monitoring
+    - monitoring_stack
+    - phase6
+- name: 移除监控配置目录
+  become: true
+  ansible.builtin.file:
+    path: "{{ monitoring_stack_dir }}"
+    state: absent
+  tags:
+    - rollback
+    - observability
+    - monitoring_stack_monitoring
+    - monitoring_stack
+    - phase6

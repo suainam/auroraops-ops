@@ -1,0 +1,83 @@
+---
+- name: 删除旧的 alert_check.sh cron 任务
+  ansible.builtin.cron:
+    name: 定期执行告警检查
+    state: absent
+  tags:
+    - rollback
+    - observability
+    - health_checks
+    - health_checks_cleanup_old_cron
+    - phase6
+- name: 删除旧的 heartbeat.sh cron 任务
+  ansible.builtin.cron:
+    name: 定期执行心跳报告
+    state: absent
+  tags:
+    - rollback
+    - observability
+    - health_checks
+    - health_checks_cleanup_old_cron
+    - phase6
+- name: 删除旧的 notify.sh 脚本
+  ansible.builtin.file:
+    path: /usr/local/bin/notify.sh
+    state: absent
+  tags:
+    - rollback
+    - observability
+    - health_checks
+    - health_checks_cleanup_old_scripts
+    - phase6
+- name: 删除旧的 generate_status_json.sh 脚本
+  ansible.builtin.file:
+    path: /usr/local/bin/generate_status_json.sh
+    state: absent
+  tags:
+    - rollback
+    - observability
+    - health_checks
+    - health_checks_cleanup_old_scripts
+    - phase6
+- name: 删除旧的 alert_check.sh 脚本
+  ansible.builtin.file:
+    path: /usr/local/bin/alert_check.sh
+    state: absent
+  tags:
+    - rollback
+    - observability
+    - health_checks
+    - health_checks_cleanup_old_scripts
+    - phase6
+- name: 删除旧的 heartbeat.sh 脚本
+  ansible.builtin.file:
+    path: /usr/local/bin/heartbeat.sh
+    state: absent
+  tags:
+    - rollback
+    - observability
+    - health_checks
+    - health_checks_cleanup_old_scripts
+    - phase6
+- name: 删除 /var/log/health_checks 目录
+  ansible.builtin.file:
+    path: /var/log/health_checks
+    state: absent
+  tags:
+    - rollback
+    - observability
+    - health_checks
+    - health_checks_cleanup_log_directory
+    - phase6
+
+- name: Remove Health Checks logrotate configuration
+  become: true
+  ansible.builtin.file:
+    path: "{{ health_checks_logrotate_config_path }}"
+    state: absent
+  tags:
+    - rollback
+    - observability
+    - health_checks
+    - health_checks_remove_logrotate_config
+    - phase6

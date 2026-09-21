@@ -1,0 +1,84 @@
+---
+# =============================================================================
+# Add Deploy Key to GitHub via API
+# =============================================================================
+
+- name: Check if public key file exists
+  ansible.builtin.stat:
+    path: "{{ gh_key_public_key_path }}"
+  register: gh_key_pubkey_stat
+  tags: [deploy, ci_cd, gh_key, gh_key_api, phase9]
+
+- name: Read public key content
+  ansible.builtin.slurp:
+    src: "{{ gh_key_public_key_path }}"
+  register: gh_key_public_key_slurp
+  when: gh_key_pubkey_stat.stat.exists
+  tags: [deploy, ci_cd, gh_key, gh_key_api, phase9]
+
+- name: Set public key fact
+  ansible.builtin.set_fact:
+    gh_key_public_key: "{{ gh_key_public_key_slurp['content'] | b64decode | trim }}"
+  when: gh_key_pubkey_stat.stat.exists
+  tags: [deploy, ci_cd, gh_key, gh_key_api, phase9]
+
+- name: Check if deploy key already exists
+  ansible.builtin.uri:
+    url: "{{ gh_key_api_base_url }}/repos/{{ gh_key_repo }}/keys"
+    method: GET
+    headers:
+      Authorization: "token {{ gh_key_token }}"
+      Accept: "application/vnd.github.v3+json"
+    timeout: "{{ gh_key_api_timeout }}"
+    status_code: 200
+  register: gh_key_existing_keys
+  no_log: true
+  when: gh_key_pubkey_stat.stat.exists
+  tags: [deploy, ci_cd, gh_key, gh_key_api, phase9]
+
+- name: Filter keys by hostname
+  ansible.builtin.set_fact:
+    gh_key_matching_keys: "{{ gh_key_existing_keys.json | selectattr('title', 'search', inventory_hostname) | list }}"
+  when: gh_key_pubkey_stat.stat.exists
+  tags: [deploy, ci_cd, gh_key, gh_key_api, phase9]
+
+- name: Display existing keys status
+  ansible.builtin.debug:
+    msg: "Found {{ gh_key_matching_keys | length }} existing deploy key(s) for {{ inventory_hostname }}"
+  when: gh_key_pubkey_stat.stat.exists
+  tags: [deploy, ci_cd, gh_key, gh_key_api, phase9]
+
+- name: Add deploy key to GitHub
+  ansible.builtin.uri:
+    url: "{{ gh_key_api_base_url }}/repos/{{ gh_key_repo }}/keys"
+    method: POST
+    headers:
+      Authorization: "token {{ gh_key_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body:
+      title: "{{ gh_key_deploy_key_title }}"
+      key: "{{ gh_key_public_key }}"
+      read_only: "{{ gh_key_read_only }}"
+    timeout: "{{ gh_key_api_timeout }}"
+    status_code: [201, 422]
+  register: gh_key_add_result
+  no_log: true
+  when: gh_key_pubkey_stat.stat.exists and gh_key_matching_keys | length == 0
+  tags: [deploy, ci_cd, gh_key, gh_key_api, phase9]
+
+- name: Display add result
+  ansible.builtin.debug:
+    msg:
+      - >-
+        Deploy key status: {{
+          'ADDED'
+          if (gh_key_add_result.status | default(0)) == 201
+          else 'ALREADY EXISTS'
+          if (gh_key_add_result.status | default(0)) == 422
+          else 'SKIPPED'
+        }}
+      - "Title: {{ gh_key_deploy_key_title }}"
+      - "Read-only: {{ gh_key_read_only }}"
+  when: gh_key_add_result is defined and gh_key_add_result is not skipped
+  tags: [deploy, ci_cd, gh_key, gh_key_api, phase9]

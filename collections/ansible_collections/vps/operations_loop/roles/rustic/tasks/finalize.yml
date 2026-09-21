@@ -1,0 +1,16 @@
+---
+- name: Remove legacy combined backup units after all split units are active
+  become: true
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ item }}"
+    state: absent
+  loop:
+    - rustic-backup.service
+    - rustic-backup.timer
+  tags: [deploy, operations_loop, rustic, rustic_finalize, phase7]
+
+- name: Reload systemd after removing legacy Rustic units
+  become: true
+  ansible.builtin.systemd:
+    daemon_reload: true
+  tags: [deploy, operations_loop, rustic, rustic_finalize, phase7]

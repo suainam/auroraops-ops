@@ -1,0 +1,3 @@
+---
+# 参数已迁移至 inventories/group_vars/all.yml 统一维护
+backup_manage_retired_units: false

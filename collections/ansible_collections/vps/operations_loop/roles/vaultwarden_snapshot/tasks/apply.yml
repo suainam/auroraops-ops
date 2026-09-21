@@ -1,0 +1,118 @@
+---
+- name: Check Vaultwarden data directory
+  become: true
+  ansible.builtin.stat:
+    path: "{{ vaultwarden_snapshot_source_dir }}"
+  register: vaultwarden_snapshot_source_stat
+  tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_preflight, phase7]
+
+- name: Validate Vaultwarden snapshot preconditions
+  ansible.builtin.assert:
+    that:
+      - vaultwarden_snapshot_source_stat.stat.isdir | default(false)
+      - vaultwarden_snapshot_retention | int >= 1
+      - vaultwarden_snapshot_timer_calendar | string | length > 0
+    fail_msg: "Vaultwarden snapshot source or configuration is invalid"
+  tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_preflight, phase7]
+
+- name: Check Vaultwarden container state
+  become: true
+  ansible.builtin.command:
+    argv:
+      - docker
+      - inspect
+      - --format
+      - "{{ '{{' }}.State.Running{{ '}}' }}"
+      - "{{ vaultwarden_snapshot_container }}"
+  register: vaultwarden_snapshot_container_state
+  check_mode: false
+  changed_when: false
+  failed_when: >-
+    vaultwarden_snapshot_container_state.rc != 0
+    or vaultwarden_snapshot_container_state.stdout | trim != 'true'
+  tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_preflight, phase7]
+
+- name: Ensure Vaultwarden snapshot root exists
+  become: true
+  ansible.builtin.file:
+    path: "{{ vaultwarden_snapshot_root }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_install, phase7]
+
+- name: Install Vaultwarden snapshot CLI
+  become: true
+  ansible.builtin.copy:
+    src: vaultwarden_snapshot.py
+    dest: "{{ vaultwarden_snapshot_script_path }}"
+    owner: root
+    group: root
+    mode: "0750"
+  tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_install, phase7]
+
+- name: Deploy Vaultwarden snapshot service
+  ansible.builtin.include_role:
+    name: vps.applications.application_service
+  vars:
+    app_service_name: "{{ vaultwarden_snapshot_service_name }}"
+    app_service_description: "Create a consistent Vaultwarden recovery snapshot"
+    app_service_type: oneshot
+    app_service_exec_start: "{{ python_executor }} {{ vaultwarden_snapshot_script_path }} create"
+    app_service_user: root
+    app_service_group: root
+    app_service_working_directory: "{{ vaultwarden_snapshot_root }}"
+    app_service_environment_file: "{{ vaultwarden_snapshot_environment_file }}"
+    app_service_environment:
+      VAULTWARDEN_SNAPSHOT_SOURCE_DIR: "{{ vaultwarden_snapshot_source_dir }}"
+      VAULTWARDEN_SNAPSHOT_ROOT: "{{ vaultwarden_snapshot_root }}"
+      VAULTWARDEN_SNAPSHOT_CONTAINER: "{{ vaultwarden_snapshot_container }}"
+      VAULTWARDEN_SNAPSHOT_HEALTH_URL: "{{ vaultwarden_snapshot_health_url }}"
+      VAULTWARDEN_SNAPSHOT_RETENTION: "{{ vaultwarden_snapshot_retention }}"
+      VAULTWARDEN_SNAPSHOT_HOSTNAME: "{{ inventory_hostname }}"
+      VAULTWARDEN_SNAPSHOT_NOTIFIER: "{{ vaultwarden_snapshot_notifier_path }}"
+      VAULTWARDEN_SNAPSHOT_NOTIFIER_PYTHON: "{{ vaultwarden_snapshot_notifier_python }}"
+      VAULTWARDEN_SNAPSHOT_NOTIFY_FAILURE: "{{ vaultwarden_snapshot_notify_failure | bool | ternary('true', 'false') }}"
+    app_service_dependencies:
+      - docker.service
+    app_service_requires:
+      - docker.service
+    app_service_timeout: 300
+    app_service_restart: "no"
+    app_service_enabled: false
+    app_service_state: stopped
+  tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_service, phase7]
+
+- name: Deploy Vaultwarden snapshot timer
+  ansible.builtin.include_role:
+    name: vps.applications.application_timer
+  vars:
+    app_timer_name: "{{ vaultwarden_snapshot_service_name }}"
+    app_timer_description: "Vaultwarden consistent snapshot every 10 minutes"
+    app_timer_on_calendar: "{{ vaultwarden_snapshot_timer_calendar }}"
+    app_timer_persistent: true
+    app_timer_enabled: true
+    app_timer_state: started
+  tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_timer, phase7]
+
+- name: Flush Vaultwarden snapshot unit handlers
+  ansible.builtin.meta: flush_handlers
+  tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_service, phase7]
+
+- name: Check for an initial published Vaultwarden snapshot
+  become: true
+  ansible.builtin.stat:
+    path: "{{ vaultwarden_snapshot_root }}/latest.json"
+  register: vaultwarden_snapshot_latest_stat
+  tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_create, phase7]
+
+- name: Create requested or initial Vaultwarden snapshot
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ vaultwarden_snapshot_service_name }}.service"
+    state: started
+  when:
+    - not ansible_check_mode
+    - vaultwarden_snapshot_create_now | bool or not vaultwarden_snapshot_latest_stat.stat.exists
+  tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_create, phase7]

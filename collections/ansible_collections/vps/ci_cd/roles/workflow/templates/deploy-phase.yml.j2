@@ -1,0 +1,41 @@
+name: Deploy Phase
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: Phase to deploy and verify
+        required: true
+        default: "4"
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    env:
+      ANSIBLE_VAULT_PASSWORD_FILE: {% raw %}${{ github.workspace }}/.vault_pass.txt{% endraw %}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate playbooks
+        run: |
+          make generate-playbooks
+
+      - name: Write vault password file
+        env:
+          VAULT_PASS: {% raw %}${{ secrets.ANSIBLE_VAULT_PASSWORD }}{% endraw %}
+        run: |
+          printf '%s' "$VAULT_PASS" > .vault_pass.txt
+          chmod 600 .vault_pass.txt
+
+      - name: Deploy selected phase
+        run: |
+          PHASE="{% raw %}${{ inputs.phase }}{% endraw %}"
+          make deploy-phase${PHASE}
+
+      - name: Verify selected phase
+        run: |
+          PHASE="{% raw %}${{ inputs.phase }}{% endraw %}"
+          make verify-phase${PHASE}

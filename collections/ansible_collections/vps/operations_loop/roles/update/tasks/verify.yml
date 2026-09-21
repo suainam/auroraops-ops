@@ -1,0 +1,29 @@
+---
+- name: "验证系统连通性"
+  ansible.builtin.ping:
+  tags: [verify, operations_loop, update, phase8]
+
+- name: "检查是否还有可升级的包"
+  become: true
+  ansible.builtin.shell: |
+    set -o pipefail
+    apt list --upgradable 2>/dev/null | grep -v "Listing..."
+  args:
+    executable: /bin/bash
+  register: update_upgradable_packages
+  changed_when: false
+  failed_when: false
+  tags: [verify, operations_loop, update, phase8]
+
+- name: "显示待升级包数量 (应为 0 或极少)"
+  ansible.builtin.debug:
+    msg: "当前仍有 {{ update_upgradable_packages.stdout_lines | length }} 个包可升级"
+  tags: [verify, operations_loop, update, phase8]
+
+- name: "检查 SSH 服务状态"
+  become: true
+  ansible.builtin.systemd:
+    name: ssh
+  register: update_ssh_status
+  failed_when: update_ssh_status.status.ActiveState != 'active'
+  tags: [verify, operations_loop, update, phase8]

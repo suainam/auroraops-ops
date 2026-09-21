@@ -1,0 +1,86 @@
+---
+vaultwarden_standby_mode: "standby"
+vaultwarden_standby_snapshot_only: false
+
+# Shared
+vaultwarden_standby_source_snapshot_root: "/opt/backups/vaultwarden-snapshots"
+vaultwarden_standby_source_host: "10.147.20.129"
+vaultwarden_standby_source_port: 6868
+vaultwarden_standby_source_user: "vaultwarden-sync"
+vaultwarden_standby_source_module: "vaultwarden-snapshots"
+vaultwarden_standby_peer_inventory_host: "rasp"
+vaultwarden_standby_peer_zerotier_ip: "10.147.20.192"
+
+# qqg1299 source mode
+vaultwarden_standby_source_user_home: "/var/lib/vaultwarden-sync"
+vaultwarden_standby_source_rsyncd_config: "/etc/rsyncd-vaultwarden-standby.conf"
+vaultwarden_standby_source_sudoers: "/etc/sudoers.d/vaultwarden-standby-rsync"
+vaultwarden_standby_source_authorized_keys: "{{ vaultwarden_standby_source_user_home }}/.ssh/authorized_keys"
+vaultwarden_standby_source_fixed_command: >-
+  sudo -n /usr/bin/rsync --server --daemon --config={{ vaultwarden_standby_source_rsyncd_config }} .
+
+# Raspberry Pi standby mode
+vaultwarden_standby_root: "/opt/vaultwarden-standby"
+vaultwarden_standby_config_dir: "/etc/vaultwarden-standby"
+vaultwarden_standby_script_path: "/usr/local/sbin/vaultwarden_standby.py"
+vaultwarden_standby_ssh_key: "{{ vaultwarden_standby_config_dir }}/id_ed25519"
+vaultwarden_standby_known_hosts: "{{ vaultwarden_standby_config_dir }}/known_hosts"
+vaultwarden_standby_retention: 12
+vaultwarden_standby_service_name: "vaultwarden-standby-sync"
+vaultwarden_standby_service_user: "vaultwarden-standby"
+vaultwarden_standby_service_group: "vaultwarden-standby"
+vaultwarden_standby_timer_calendar: "*-*-* *:0/5:00"
+vaultwarden_standby_timer_enabled: true
+vaultwarden_standby_run_initial_sync: true
+vaultwarden_standby_max_age_seconds: 900
+
+# Manual disaster-recovery control plane on Raspberry Pi.
+# 旧 vaultwarden_dr_* inventory 输入继续兼容。
+vaultwarden_standby_dr_root: >-
+  {{ vaultwarden_dr_root | default('/opt/vaultwarden-dr') }}
+vaultwarden_standby_dr_script_path: >-
+  {{ vaultwarden_dr_script_path | default('/usr/local/sbin/vaultwarden_dr.py') }}
+vaultwarden_standby_dr_data_dir: >-
+  {{ vaultwarden_dr_data_dir | default('/opt/dockers/vaultwarden/data') }}
+vaultwarden_standby_dr_health_service_name: >-
+  {{ vaultwarden_dr_health_service_name | default('vaultwarden-dr-health') }}
+vaultwarden_standby_dr_health_timer_calendar: >-
+  {{ vaultwarden_dr_health_timer_calendar | default('*-*-* *:*:00') }}
+vaultwarden_standby_dr_health_timer_enabled: >-
+  {{ vaultwarden_dr_health_timer_enabled | default(true) }}
+vaultwarden_standby_dr_health_failure_threshold: >-
+  {{ vaultwarden_dr_health_failure_threshold | default(5) }}
+vaultwarden_standby_dr_health_timeout_seconds: >-
+  {{ vaultwarden_dr_health_timeout_seconds | default(10) }}
+vaultwarden_standby_dr_primary_health_url: >-
+  {{
+    vaultwarden_dr_primary_health_url
+    | default('https://bws.suai.eu.org/alive')
+  }}
+vaultwarden_standby_dr_primary_ssh_host: >-
+  {{ vaultwarden_dr_primary_ssh_host | default('10.147.20.129') }}
+vaultwarden_standby_dr_primary_ssh_port: >-
+  {{ vaultwarden_dr_primary_ssh_port | default(6868) }}
+vaultwarden_standby_dr_tunnel_ready_url: >-
+  {{ vaultwarden_dr_tunnel_ready_url | default('http://127.0.0.1:20241/ready') }}
+vaultwarden_standby_dr_local_health_url: >-
+  {{ vaultwarden_dr_local_health_url | default('http://127.0.0.1:30007/alive') }}
+vaultwarden_standby_dr_public_health_url: >-
+  {{ vaultwarden_dr_public_health_url | default('https://bws.msuai.top/alive') }}
+vaultwarden_standby_dr_notifier_path: >-
+  {{ vaultwarden_dr_notifier_path | default('/usr/local/bin/notifier.py') }}
+vaultwarden_standby_dr_notifier_python: >-
+  {{
+    vaultwarden_dr_notifier_python
+    | default(
+        health_checks_python_interpreter_path
+        | default('/opt/aurora_venv/bin/python3')
+      )
+  }}
+
+# Existing docker_apps/vaultwarden container inspected by status/verify.
+vaultwarden_standby_container_name: "vaultwarden"
+
+# Rollback preserves recovery data and enrollment key by default.
+vaultwarden_standby_rollback_remove_data: false
+vaultwarden_standby_rollback_remove_key: false

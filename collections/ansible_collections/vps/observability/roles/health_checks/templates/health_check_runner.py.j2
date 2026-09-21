@@ -1,0 +1,767 @@
+#!/usr/bin/env python3
+# health_check_runner.py
+# 职责：执行系统健康检查，输出标准 JSON 结果，支持动态阈值和自愈逻辑。
+
+import os
+import sys
+import json
+import argparse
+import socket
+import datetime
+import subprocess
+import time
+import re
+import concurrent.futures
+from pathlib import Path
+
+# --- 基础信息 ---
+VERSION = "2.3.1"
+MODIFIED_DATE = "2026-07-28"
+LOG_DIR = "/var/log/health_checks"
+LOG_FILE = os.path.join(LOG_DIR, "health_check_runner.log")
+
+# --- 时区处理 ---
+# 强制使用上海时区（若系统环境已配置，则 datetime.now() 默认即为本地时间）
+# 这里我们通过 offset 手动确保输出的一致性，或者信任系统 localtime
+def get_now_local():
+    return datetime.datetime.now()
+
+# --- 动态阈值 (来自 Ansible) ---
+CONFIG = {
+    "DISK_WARN": {{ health_checks_disk_warning_threshold | default(80) }},
+    "DISK_CRIT": {{ health_checks_disk_critical_threshold | default(90) }},
+    "MEM_WARN": {{ health_checks_memory_warning_threshold | default(80) }},
+    "MEM_CRIT": {{ health_checks_memory_critical_threshold | default(90) }},
+    "CPU_WARN": {{ health_checks_cpu_warning_threshold | default(80) }},
+    "CPU_CRIT": {{ health_checks_cpu_critical_threshold | default(95) }},
+    "CPU_STEAL_WARN": {{ health_checks_cpu_steal_threshold | default(30) }},
+    "IO_AWAIT_WARN": {{ health_checks_io_await_warning_threshold | default(150) }},
+    "IO_AWAIT_CRIT": {{ health_checks_io_await_critical_threshold | default(500) }},
+    "SWAP_WARN": {{ health_checks_swap_warning_threshold | default(50) }},
+    "SWAP_CRIT": {{ health_checks_swap_critical_threshold | default(80) }},
+    "BOOT_GRACE_PERIOD": 300,
+    "SELF_HEALING_SERVICES": {{ health_checks_healing_services | default([]) | to_json }},
+    "MONITOR_SERVICES": {{ health_checks_services | default([]) | to_json }},
+    "BACKUP_BASE_DIR": "{{ rustic_backup_base_dir | default(backup_base_dir | default('/opt/backups')) }}",
+    "BACKUP_CLOUD_PREFIX": "{{ rustic_backup_cloud_prefix | default(backup_cloud_prefix | default('backup')) }}",
+    "BACKUP_CLOUD_REMOTES": {{ rustic_backup_cloud_remotes | default(backup_cloud_remotes | default(['onedrive', 'gdrive'])) | to_json }},
+    "BACKUP_LOCAL_WARN_AGE_HOURS": {{ health_checks_rustic_local_warning_age_hours | default(2.5) }},
+    "BACKUP_LOCAL_CRIT_AGE_HOURS": {{ health_checks_rustic_local_critical_age_hours | default(4) }},
+    "BACKUP_CLOUD_WARN_AGE_HOURS": {{ health_checks_rustic_cloud_warning_age_hours | default(8) }},
+    "BACKUP_CLOUD_CRIT_AGE_HOURS": {{ health_checks_rustic_cloud_critical_age_hours | default(14) }},
+    "BACKUP_CLEANUP_MARKER": "{{ rustic_cleanup_success_marker | default('/var/lib/rustic/cleanup-success.json') }}",
+    "BACKUP_CLEANUP_WARN_AGE_HOURS": {{ health_checks_rustic_cleanup_warning_age_hours | default(2.5) }},
+    "BACKUP_CLEANUP_CRIT_AGE_HOURS": {{ health_checks_rustic_cleanup_critical_age_hours | default(4) }},
+}
+
+def log_message(level, message):
+    timestamp = get_now_local().strftime("%Y-%m-%dT%H:%M:%S")
+    hostname = socket.gethostname()
+    log_entry = f"[{timestamp}] [{hostname}] [{level}] {message}\n"
+    sys.stderr.write(log_entry)
+    try:
+        if not os.path.exists(LOG_DIR):
+            os.makedirs(LOG_DIR)
+        with open(LOG_FILE, "a") as f:
+            f.write(log_entry)
+    except Exception as e:
+        sys.stderr.write(f"Failed to write log: {e}\n")
+
+def run_command(cmd, timeout=30, env=None):
+    run_env = None
+    if env:
+        run_env = os.environ.copy()
+        run_env.update(env)
+    else:
+        run_env = os.environ.copy()
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, shell=isinstance(cmd, str), env=run_env)
+        return result.stdout.strip(), result.returncode
+    except Exception as e:
+        return str(e), -1
+
+def get_rustic_latest_snapshot_age(repo_path, rustic_env, timeout=65):
+    """返回 Rustic 仓库最新 snapshot 年龄（小时）。"""
+    cmd = ["timeout", str(timeout), "rustic", "-r", repo_path, "snapshots", "--json"]
+    out, cmd_code = run_command(cmd, timeout=timeout+5, env=rustic_env)
+    if cmd_code == 0 and out.strip():
+        try:
+            data = json.loads(out)
+            snapshots = []
+            if isinstance(data, list):
+                for group in data:
+                    snapshots.extend(group.get("snapshots", []))
+            if snapshots:
+                latest = max(item.get("time") for item in snapshots if item.get("time"))
+                snapshot_time = datetime.datetime.fromisoformat(latest.replace("Z", "+00:00"))
+                now = datetime.datetime.now(snapshot_time.tzinfo) if snapshot_time.tzinfo else datetime.datetime.now()
+                return round(max((now - snapshot_time).total_seconds(), 0) / 3600, 1)
+        except (json.JSONDecodeError, ValueError, TypeError, KeyError):
+            pass
+    return None
+
+def get_rustic_cleanup_age(marker_path):
+    """返回最近一次全部仓库清理成功标记的年龄（小时）。"""
+    try:
+        with open(marker_path, "r", encoding="utf-8") as marker_file:
+            payload = json.load(marker_file)
+        if payload.get("schema") != "auroraops.rustic-cleanup-success/v1":
+            return None
+        completed_at = payload.get("completed_at")
+        marker_time = datetime.datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
+        now = datetime.datetime.now(marker_time.tzinfo) if marker_time.tzinfo else datetime.datetime.now()
+        return round(max((now - marker_time).total_seconds(), 0) / 3600, 1)
+    except (OSError, json.JSONDecodeError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def classify_backup_age(age_hours, warning_hours, critical_hours):
+    """按备份目标的新鲜度阈值返回状态和紧凑展示文本。"""
+    if age_hours is None:
+        return "error", "ERR"
+    if age_hours >= critical_hours:
+        return "critical", f"✗{age_hours}h"
+    if age_hours >= warning_hours:
+        return "warning", f"⚠{age_hours}h"
+    return "ok", f"✓{age_hours}h"
+
+class HealthCheckRunner:
+    def __init__(self):
+        self.results = []
+        self.hostname = socket.gethostname()
+        self.ip_address = self._get_ip_address()
+        self.is_boot_grace = self._check_boot_grace()
+        self.timestamp = get_now_local().strftime("%Y-%m-%dT%H:%M:%S")
+
+    def _get_ip_address(self):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
+
+    def _check_boot_grace(self):
+        try:
+            with open("/proc/uptime", "r") as f:
+                uptime_seconds = float(f.readline().split()[0])
+            if uptime_seconds < CONFIG["BOOT_GRACE_PERIOD"]:
+                log_message("INFO", f"System just booted ({uptime_seconds:.0f}s ago). Grace period active.")
+                return True
+        except Exception:
+            pass
+        return False
+
+    def add_result(self, service, status, severity, message, metrics=None, self_healing_attempted=False, self_healing_success=False):
+        if status != "ok":
+            log_message("WARNING", f"Anomaly in {service}: {status} ({severity}) - {message}")
+
+        if self.is_boot_grace:
+            status = "ok"
+            severity = "info"
+            message = f"[BOOT-GRACE] {message}"
+
+        self.results.append({
+            "timestamp": self.timestamp,
+            "host": self.hostname,
+            "ip_address": self.ip_address,
+            "service": service,
+            "status": status,
+            "severity": severity,
+            "message": message,
+            "metrics": metrics or {},
+            "self_healing_attempted": self_healing_attempted,
+            "self_healing_success": self_healing_success
+        })
+
+    def check_disk(self, mount_point="/"):
+        try:
+            st = os.statvfs(mount_point)
+            total = st.f_blocks * st.f_frsize
+            used = (st.f_blocks - st.f_bfree) * st.f_frsize
+            usage_percent = round((used / total) * 100, 2) if total > 0 else 0
+            
+            status, severity, message = "ok", "info", "Disk usage is normal."
+            if usage_percent >= CONFIG["DISK_CRIT"]:
+                status, severity, message = "critical", "high", f"Disk usage is critically high ({usage_percent}%)."
+            elif usage_percent >= CONFIG["DISK_WARN"]:
+                status, severity, message = "warning", "medium", f"Disk usage is high ({usage_percent}%)."
+            
+            self.add_result(f"disk_usage_{mount_point}", status, severity, message, {"usage": usage_percent, "mount_point": mount_point})
+        except Exception as e:
+            self.add_result(f"disk_usage_{mount_point}", "fatal", "critical", f"Error checking disk: {e}")
+
+    def check_memory(self):
+        try:
+            mem = {}
+            with open("/proc/meminfo", "r") as f:
+                for line in f:
+                    parts = line.split()
+                    mem[parts[0].replace(":", "")] = int(parts[1])
+            
+            total_kb = mem.get("MemTotal", 0)
+            avail_kb = mem.get("MemAvailable", 0)
+            usage_percent = round(100 - (avail_kb / total_kb) * 100, 2) if total_kb > 0 else 0
+            
+            status, severity, message = "ok", "info", "Memory usage is normal."
+            if usage_percent >= CONFIG["MEM_CRIT"]:
+                status, severity, message = "critical", "high", f"Memory usage is critically high ({usage_percent}%)."
+            elif usage_percent >= CONFIG["MEM_WARN"]:
+                status, severity, message = "warning", "medium", f"Memory usage is high ({usage_percent}%)."
+            
+            metrics = {
+                "total_kb": total_kb,
+                "avail_kb": avail_kb,
+                "usage_percent": usage_percent,
+                "avail_gb": f"{avail_kb/1024/1024:.2f} GiB"
+            }
+            self.add_result("memory_usage", status, severity, message, metrics)
+        except Exception as e:
+            self.add_result("memory_usage", "fatal", "critical", f"Error checking memory: {e}")
+
+    def check_cpu(self):
+        try:
+            load_1m, load_5m, load_15m = os.getloadavg()
+            cores = os.cpu_count() or 1
+            load_threshold = cores * 2
+
+            def get_cpu_times():
+                with open("/proc/stat", "r") as f:
+                    line = f.readline()
+                return [int(x) for x in line.split()[1:]]
+
+            t1 = get_cpu_times()
+            time.sleep(1)
+            t2 = get_cpu_times()
+            
+            diff = [t2[i] - t1[i] for i in range(len(t1))]
+            total = sum(diff)
+            if total == 0: total = 1
+            
+            idle = diff[3]
+            usage = round(100 - (idle / total) * 100, 2)
+            iowait = round((diff[4] / total) * 100, 2)
+            steal = round((diff[7] / total) * 100, 2)
+
+            status, severity, message = "ok", "info", f"CPU usage is normal ({usage:.2f}%)."
+            if usage >= CONFIG["CPU_CRIT"]:
+                if load_15m > load_threshold:
+                    status, severity, message = "critical", "high", f"CPU critically high & overloaded (Usage: {usage:.2f}%, Load: {load_15m:.2f})."
+                else:
+                    status, severity, message = "warning", "low", f"CPU high but load stable (Usage: {usage:.2f}%, Load: {load_15m:.2f})."
+            elif usage >= CONFIG["CPU_WARN"]:
+                status, severity, message = "warning", "low", f"CPU usage is transiently high ({usage:.2f}%)."
+            elif steal >= CONFIG["CPU_STEAL_WARN"]:
+                status, severity, message = "warning", "medium", f"CPU Steal is high ({steal:.2f}%)."
+
+            metrics = {"usage_percent": usage, "steal_percent": steal, "iowait_percent": iowait, "load_15m": round(load_15m, 2)}
+            self.add_result("cpu_usage", status, severity, message, metrics)
+        except Exception as e:
+            self.add_result("cpu_usage", "fatal", "critical", f"Error checking CPU: {e}")
+
+    def check_oom(self):
+        try:
+            out, code = run_command("dmesg | grep -i 'out of memory' | wc -l")
+            count = int(out) if code == 0 and out.isdigit() else 0
+            status, severity, message = "ok", "info", "No OOM events detected."
+            if count > 0:
+                status, severity, message = "critical", "high", f"Detected {count} OOM events!"
+            self.add_result("oom_events", status, severity, message, {"count": count})
+        except Exception:
+            pass
+
+    def check_service(self, service_name):
+        try:
+            # 对于模板实例化服务 (如 postgresql@17-main)，使用 systemctl cat 检查是否存在
+            if '@' in service_name:
+                _, code = run_command(["systemctl", "cat", service_name])
+                if code != 0:
+                    return
+            else:
+                out, code = run_command(["systemctl", "list-unit-files", f"{service_name}.service"])
+                if service_name not in out:
+                    return
+
+            out, code = run_command(["systemctl", "is-active", service_name])
+            is_active = (out == "active")
+            
+            status, severity, message = "ok", "info", f"{service_name} is running."
+            attempted, success = False, False
+
+            if not is_active:
+                status, severity, message = "critical", "high", f"{service_name} is not running."
+                if service_name in CONFIG["SELF_HEALING_SERVICES"]:
+                    attempted = True
+                    log_message("INFO", f"Attempting self-healing for {service_name}...")
+                    _, restart_code = run_command(["systemctl", "restart", service_name])
+                    if restart_code == 0:
+                        success = True
+                        status, severity, message = "warning", "medium", f"{service_name} was restarted successfully."
+                    else:
+                        message = f"{service_name} restart failed."
+            
+            self.add_result(service_name, status, severity, message, {}, attempted, success)
+        except Exception as e:
+            log_message("ERROR", f"Failed to check service {service_name}: {e}")
+
+    def check_backups(self):
+        """按本地与云端各自的备份周期检查 Rustic 快照新鲜度。"""
+        backup_status = {}
+        repository_states = []
+        metrics = {}
+
+        rustic_env = {}
+        if os.getenv("RUSTIC_PASSWORD"):
+            rustic_env["RUSTIC_PASSWORD"] = os.getenv("RUSTIC_PASSWORD")
+        if os.getenv("RCLONE_CONFIG"):
+            rustic_env["RCLONE_CONFIG"] = os.getenv("RCLONE_CONFIG")
+
+        rclone_env = {}
+        if os.getenv("RCLONE_CONFIG"):
+            rclone_env["RCLONE_CONFIG"] = os.getenv("RCLONE_CONFIG")
+
+        cloud_prefix = CONFIG.get("BACKUP_CLOUD_PREFIX", "backup")
+        backup_base_dir = CONFIG.get("BACKUP_BASE_DIR", "/opt/backups")
+
+        local_repo = f"{backup_base_dir}/complete"
+        local_age = get_rustic_latest_snapshot_age(local_repo, rustic_env) if os.path.isdir(local_repo) else None
+        local_state, local_display = classify_backup_age(
+            local_age,
+            CONFIG["BACKUP_LOCAL_WARN_AGE_HOURS"],
+            CONFIG["BACKUP_LOCAL_CRIT_AGE_HOURS"],
+        )
+        backup_status["L"] = local_display
+        repository_states.append(local_state)
+        if local_age is not None:
+            metrics["local_age_hours"] = local_age
+
+        configured_remotes = CONFIG.get("BACKUP_CLOUD_REMOTES", [])
+        remote_labels = {"onedrive": "O", "gdrive": "G"}
+        remotes_out, remotes_code = run_command(["rclone", "listremotes"], env=rclone_env)
+
+        for remote in configured_remotes:
+            label = remote_labels.get(remote, remote)
+            age = None
+            if remotes_code == 0 and f"{remote}:" in remotes_out:
+                age = get_rustic_latest_snapshot_age(
+                    f"rclone:{remote}:{cloud_prefix}/complete",
+                    rustic_env,
+                )
+            state, display = classify_backup_age(
+                age,
+                CONFIG["BACKUP_CLOUD_WARN_AGE_HOURS"],
+                CONFIG["BACKUP_CLOUD_CRIT_AGE_HOURS"],
+            )
+            backup_status[label] = display
+            repository_states.append(state)
+            if age is not None:
+                metrics[f"{remote}_age_hours"] = age
+
+        cleanup_age = get_rustic_cleanup_age(CONFIG["BACKUP_CLEANUP_MARKER"])
+        cleanup_state, cleanup_display = classify_backup_age(
+            cleanup_age,
+            CONFIG["BACKUP_CLEANUP_WARN_AGE_HOURS"],
+            CONFIG["BACKUP_CLEANUP_CRIT_AGE_HOURS"],
+        )
+        backup_status["C"] = cleanup_display
+        if cleanup_age is not None:
+            metrics["cleanup_age_hours"] = cleanup_age
+
+        message = "Backups: " + " | ".join(
+            f"{label}={display}" for label, display in backup_status.items()
+        )
+
+        unhealthy_states = [state for state in repository_states if state != "ok"]
+        status, severity = "ok", "info"
+        if unhealthy_states or cleanup_state in ("critical", "error"):
+            status, severity = "warning", "medium"
+        if repository_states and all(state in ("critical", "error") for state in repository_states):
+            status, severity = "critical", "high"
+
+        self.add_result("backups", status, severity, message, metrics)
+
+    def check_audit(self):
+        try:
+            reboot_req = os.path.exists("/var/run/reboot-required")
+            with open("/proc/uptime", "r") as f:
+                uptime_seconds = float(f.readline().split()[0])
+            boot_time = get_now_local() - datetime.timedelta(seconds=uptime_seconds)
+            
+            failed_out, _ = run_command("journalctl --since '1 hour ago' -q --output=cat | grep -c 'Failed password' || echo 0")
+            failed_count = int(failed_out) if failed_out.strip().isdigit() else 0
+            
+            apt_count = 0
+            if os.path.exists("/var/log/apt/history.log"):
+                today = get_now_local().strftime("%Y-%m-%d")
+                with open("/var/log/apt/history.log", "r") as f:
+                    apt_count = f.read().count(f"Start-Date: {today}")
+            
+            status, severity = "ok", "info"
+            message = f"Audit: [ReqReboot: {'YES' if reboot_req else 'no'}] [SecUpdates(24h): {apt_count}] [FailedLogins(1h): {failed_count}] [LastBoot: {boot_time.strftime('%Y-%m-%d %H:%M')}]"
+            
+            if reboot_req:
+                message += " [REBOOT REQUIRED]"
+            
+            self.add_result("system_audit", status, severity, message, {
+                "reboot_required": reboot_req,
+                "failed_logins_1h": failed_count,
+                "apt_updates_today": apt_count,
+                "uptime_seconds": round(uptime_seconds, 2),
+                "boot_time": boot_time.strftime("%Y-%m-%dT%H:%M:%S")
+            })
+        except Exception as e:
+            log_message("ERROR", f"Failed to check system audit: {e}")
+
+    def check_network_interfaces(self):
+        """合并 IPv4/IPv6，并按 Physical > ZT > Docker 排序"""
+        try:
+            import fcntl
+            import struct
+
+            def get_ip_v4(ifname):
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                try:
+                    return socket.inet_ntoa(fcntl.ioctl(
+                        s.fileno(), 0x8915, struct.pack('256s', ifname[:15].encode('utf-8'))
+                    )[20:24])
+                except: return None
+
+            def get_ip_v6_list(ifname):
+                try:
+                    out, _ = run_command(f"ip -6 addr show {ifname} scope global")
+                    v6_addrs = re.findall(r'inet6 ([0-9a-f:]+)', out)
+                    return v6_addrs if v6_addrs else []
+                except: return []
+
+            interfaces = os.listdir('/sys/class/net/')
+            iface_data = []
+            virtual_no_ip_count = 0
+            for iface in interfaces:
+                if iface == 'lo': continue
+                
+                try:
+                    with open(f'/sys/class/net/{iface}/operstate', 'r') as f:
+                        state = f.read().strip()
+                except: state = "unknown"
+                
+                v4 = get_ip_v4(iface)
+                v6_list = get_ip_v6_list(iface)
+
+                # 识别虚拟/Docker 接口
+                is_virtual = iface.startswith(('docker', 'br-', 'veth', 'cali', 'flannel'))
+                
+                # 如果是虚拟接口且没有 IP，则只计数不单独列出
+                if is_virtual and not v4 and not v6_list:
+                    virtual_no_ip_count += 1
+                    continue
+
+                if not v4 and not v6_list and state == "down": continue
+
+                iface_type = "Physical"
+                priority = 1
+                if iface.startswith(('zt', 'tailscale', 'wg')):
+                    iface_type = "ZeroTier"
+                    priority = 2
+                    # ZT 特殊处理：如果有 IP 且 state 是 unknown，通常其实是 up
+                    if (v4 or v6_list) and state == "unknown":
+                        state = "up"
+                elif is_virtual:
+                    iface_type = "Docker"
+                    priority = 3
+                
+                # 排序逻辑：优先级(100) + 状态(Up=0, Down=50) + 是否有IP(有=0, 无=25)
+                has_ip = v4 or v6_list
+                sort_score = priority * 100
+                sort_score += 0 if state == "up" else 50
+                sort_score += 0 if has_ip else 25
+                
+                iface_data.append({
+                    "name": iface,
+                    "type": iface_type,
+                    "state": state,
+                    "v4": v4,
+                    "v6": v6_list,
+                    "score": sort_score
+                })
+            
+            # 排序
+            iface_data.sort(key=lambda x: x["score"])
+            
+            summary = []
+            for d in iface_data:
+                ips = []
+                if d["v4"]: ips.append(f"v4:{d['v4']}")
+                if d["v6"]:
+                    v6_main = d["v6"][0]
+                    v6_count = len(d["v6"])
+                    v6_info = f"v6:{v6_main}"
+                    if v6_count > 1:
+                        v6_info += f"({v6_count-1} more)"
+                    ips.append(v6_info)
+                
+                ip_str = ",".join(ips) if ips else "no-ip"
+                summary.append(f"{d['type']}({d['name']}):[{d['state']}]({ip_str})")
+            
+            if virtual_no_ip_count > 0:
+                summary.append(f"Virtual: [{virtual_no_ip_count} veth/bridge interfaces without IP]")
+
+            self.add_result("network_interfaces", "ok", "info", " | ".join(summary), iface_data)
+        except Exception as e:
+            log_message("ERROR", f"Failed to check network interfaces: {e}")
+
+    def check_file_descriptors(self):
+        """优化文件句柄检查：现代系统限制很大，改为对比合理范围"""
+        try:
+            with open("/proc/sys/fs/file-nr", "r") as f:
+                parts = f.readline().split()
+                # total: 已分配，unused: 已分配但未用, max: 最大
+                total, unused, max_fd = int(parts[0]), int(parts[1]), int(parts[2])
+            
+            # 使用已分配数
+            used = total - unused
+            
+            # 如果系统限制过大（如 922京），则使用 100万 作为参考报警线
+            reference_max = max_fd if max_fd < 10000000 else 1048576
+            usage_percent = round((used / reference_max) * 100, 2)
+            
+            status, severity, message = "ok", "info", f"File descriptors: {used} used (RefLimit: {reference_max})."
+            if usage_percent > 80:
+                status, severity, message = "warning", "medium", f"High file descriptor usage: {usage_percent}%."
+            
+            self.add_result("file_descriptors", status, severity, message, {
+                "used": used, 
+                "total_allocated": total, 
+                "system_max": max_fd, 
+                "ref_limit": reference_max,
+                "usage_percent": usage_percent
+            })
+        except Exception:
+            pass
+
+    def check_swap(self):
+        try:
+            with open("/proc/meminfo", "r") as f:
+                meminfo = {line.split(":")[0]: line.split(":")[1].strip() for line in f}
+            
+            total_swap = int(meminfo.get("SwapTotal", "0").split()[0])
+            free_swap = int(meminfo.get("SwapFree", "0").split()[0])
+            
+            used_swap = total_swap - free_swap
+            usage_percent = round((used_swap / total_swap) * 100, 2) if total_swap > 0 else 0
+            
+            # 始终在消息中包含具体数值
+            swap_info = f"{used_swap/1024/1024:.1f}G/{total_swap/1024/1024:.1f}G" if total_swap > 0 else "0G/0G"
+            status, severity, message = "ok", "info", f"Swap usage is normal ({swap_info})."
+            
+            if total_swap == 0:
+                message = "Swap usage is normal (no swap configured)."
+            elif usage_percent >= CONFIG["SWAP_CRIT"]:
+                status, severity, message = "critical", "high", f"Swap usage is critically high ({usage_percent}%, {swap_info})."
+            elif usage_percent >= CONFIG["SWAP_WARN"]:
+                status, severity, message = "warning", "medium", f"Swap usage is high ({usage_percent}%, {swap_info})."
+            
+            self.add_result("swap", status, severity, message, {"total_kb": total_swap, "used_kb": used_swap, "usage_percent": usage_percent})
+        except Exception as e:
+            log_message("ERROR", f"Failed to check swap: {e}")
+
+    def check_load(self):
+        try:
+            load1, load5, load15 = os.getloadavg()
+            n_cpu = os.cpu_count() or 1
+            status, severity = "ok", "info"
+            # 使用 15 分钟负载作为主要判断标准，因为它更稳定
+            if load15 > n_cpu * 1.5:
+                status, severity = "error", "high"
+            elif load15 > n_cpu * 0.8:
+                status, severity = "warning", "medium"
+            
+            self.add_result("load_average", status, severity, f"System load: {load15:.2f} / {n_cpu} CPUs (1m:{load1:.2f}, 5m:{load5:.2f}, 15m:{load15:.2f}).", {
+                "1min": round(load1, 2), "5min": round(load5, 2), "15min": round(load15, 2), "n_cpu": n_cpu
+            })
+        except Exception as e:
+            log_message("ERROR", f"Failed to check load: {e}")
+
+    def check_process(self):
+        try:
+            out, _ = run_command("ps -ef | wc -l")
+            count = int(out) if out.strip().isdigit() else 0
+            self.add_result("process_count", "ok", "info", f"Total processes: {count}", {"total": count})
+        except Exception as e:
+            log_message("ERROR", f"Failed to check process count: {e}")
+
+    def check_ntp(self):
+        try:
+            out, code = run_command("timedatectl show --property=NTPSynchronized --value")
+            is_synced = out.strip() == "yes"
+            status, severity, message = "ok", "info", "NTP is synchronized."
+            if not is_synced:
+                status, severity, message = "warning", "medium", "NTP is NOT synchronized."
+            self.add_result("ntp_sync", status, severity, message, {"synchronized": is_synced})
+        except Exception as e:
+            log_message("ERROR", f"Failed to check NTP: {e}")
+
+    def check_tcp(self):
+        try:
+            out, _ = run_command("ss -ant | awk 'NR>1 {print $1}' | sort | uniq -c")
+            states = {}
+            for line in out.strip().split("\n"):
+                parts = line.split()
+                if len(parts) == 2:
+                    count, state = parts
+                    states[state] = int(count)
+            
+            summary = ", ".join([f"{k}:{v}" for k, v in states.items()])
+            self.add_result("tcp_connections", "ok", "info", f"TCP Summary: {summary}", states)
+        except Exception as e:
+            log_message("ERROR", f"Failed to check TCP states: {e}")
+
+    def check_disk_io(self):
+        try:
+            out, code = run_command("iostat -dx 1 2 | awk '/^vda|^sda|^nvme/ {print $1, $10, $14}'")
+            if code != 0 or not out: return
+            
+            lines = out.strip().split("\n")
+            half = len(lines) // 2
+            data_lines = lines[half:]
+            
+            results = {}
+            max_await = 0
+            for line in data_lines:
+                parts = line.split()
+                if len(parts) == 3:
+                    dev, await_ms, util = parts
+                    await_val = round(float(await_ms), 2)
+                    results[dev] = {"await": await_val, "util": round(float(util), 2)}
+                    max_await = max(max_await, await_val)
+            
+            status, severity, message = "ok", "info", f"Disk IO is normal (Max await: {max_await}ms)."
+            if max_await >= CONFIG["IO_AWAIT_CRIT"]:
+                status, severity, message = "critical", "high", f"Disk IO latency is critically high ({max_await}ms)."
+            elif max_await >= CONFIG["IO_AWAIT_WARN"]:
+                status, severity, message = "warning", "medium", f"Disk IO latency is high ({max_await}ms)."
+                
+            self.add_result("disk_io", status, severity, message, results)
+        except Exception as e:
+            log_message("ERROR", f"Failed to check disk IO: {e}")
+
+    def format_prometheus_metrics(self):
+        """将 check 结果转换为 Prometheus Textfile 格式"""
+        lines = []
+        
+        # 基础指标：单次运行的元数据
+        lines.append('health_check_last_run_seconds{host="%s"} %s' % (self.hostname, time.time()))
+        
+        # 遍历所有检查结果
+        for res in self.results:
+            svc = res.get("service", "unknown")
+            status = res.get("status", "unknown")
+            metrics = res.get("metrics", {})
+            
+            # 状态映射: ok=1, warning=0, critical/error/fatal=-1
+            status_val = 1
+            if status == "ok":
+                status_val = 1
+            elif status == "warning":
+                status_val = 0
+            else:
+                status_val = -1
+            
+            # 输出状态指标
+            lines.append(f"# HELP health_check_status Status of the service (1=ok, 0=warn, -1=crit)")
+            lines.append(f"# TYPE health_check_status gauge")
+            lines.append('health_check_status{service="%s", host="%s"} %s' % (svc, self.hostname, status_val))
+            
+            # 输出详细数值指标 (flatten metrics)
+            if isinstance(metrics, dict):
+                for k, v in metrics.items():
+                    if isinstance(v, (int, float)):
+                        # 清洗 key 名称，移除非法字符
+                        safe_key = re.sub(r'[^a-zA-Z0-9_]', '_', k)
+                        metric_name = f"health_check_{svc}_{safe_key}"
+                        lines.append(f"# TYPE {metric_name} gauge")
+                        lines.append('%s{host="%s"} %s' % (metric_name, self.hostname, v))
+
+        return "\n".join(lines)
+
+    def run(self, output_format="json"):
+        start_time = time.time()
+        log_message("INFO", f"Starting health_check_runner.py (version {VERSION})")
+        
+        # 并行执行其他检查项
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            # 定义任务列表
+            tasks = [
+                self.check_memory,
+                self.check_swap,
+                lambda: self.check_disk("/"),
+                self.check_load,
+                self.check_oom,
+                self.check_process,
+                self.check_file_descriptors,
+                self.check_ntp,
+                self.check_audit,
+                self.check_network_interfaces,
+                self.check_tcp,
+                self.check_backups
+            ]
+            
+            # 添加服务检查
+            for svc in CONFIG["MONITOR_SERVICES"]:
+                tasks.append(lambda s=svc: self.check_service(s))
+
+            # 提交任务
+            futures = [executor.submit(t) for t in tasks]
+            concurrent.futures.wait(futures)
+
+        # 顺序执行涉及 sleep 取样与平稳态评估的检查项（在并发任务全部完成后的平稳态取样，避免测到自身启动瞬时峰值）
+        self.check_cpu()
+        self.check_disk_io()
+        # 重新按业务逻辑排序结果（因为 ThreadPool 会打乱顺序）
+        order = [
+            "cpu_usage", "memory_usage", "swap", "disk_usage_", "disk_io", "load_average",
+            "oom_events", "process_count", "file_descriptors", "ntp_sync", "system_audit",
+            "network_interfaces", "tcp_connections", "backups_rclone"
+        ]
+        
+        def get_sort_key(res):
+            svc = res["service"]
+            for i, prefix in enumerate(order):
+                if svc.startswith(prefix): return i
+            return 99
+
+        self.results.sort(key=get_sort_key)
+
+        # 添加自愈服务配置状态到结果中（用于通知显示）
+        self_healing_list = CONFIG.get("SELF_HEALING_SERVICES", [])
+        if self_healing_list:
+            self.results.append({
+                "timestamp": self.timestamp,
+                "host": self.hostname,
+                "ip_address": self.ip_address,
+                "service": "__self_healing_config__",
+                "status": "ok",
+                "severity": "info",
+                "message": f"Self-healing: {', '.join(self_healing_list)}",
+                "metrics": {"services": self_healing_list},
+                "self_healing_attempted": False,
+                "self_healing_success": False
+            })
+
+        # 输出结果
+        if output_format == "prometheus":
+            print(self.format_prometheus_metrics())
+        else:
+            print(json.dumps(self.results))
+            
+        duration = time.time() - start_time
+        log_message("INFO", f"All checks finished in {duration:.2f}s.")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Health Check Runner")
+    parser.add_argument("--format", choices=["json", "prometheus"], default="json", help="Output format")
+    args = parser.parse_args()
+
+    runner = HealthCheckRunner()
+    runner.run(output_format=args.format)

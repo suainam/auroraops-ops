@@ -1,0 +1,14 @@
+---
+cleanup_docker_prune_keep_images: "{{ docker_prune_keep_images | default([]) }}"
+cleanup_docker_prune_timer_on_calendar: >-
+  {{ docker_prune_timer_on_calendar | default('*-*-01/3 03:00:00') }}
+cleanup_system_reboot_timer_on_calendar: >-
+  {{ system_reboot_timer_on_calendar | default('*-*-01/3 04:00:00') }}
+
+cleanup_npm: true
+cleanup_camoufox: true
+cleanup_bun: true
+cleanup_apt: true
+cleanup_pip: true
+cleanup_journal_days: 7
+cleanup_tmp_days: 7

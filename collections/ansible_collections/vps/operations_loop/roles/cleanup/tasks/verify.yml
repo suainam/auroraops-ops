@@ -1,0 +1,57 @@
+---
+- name: "[Cleanup] Verify docker-maintenance-prune.service exists"
+  ansible.builtin.stat:
+    path: /etc/systemd/system/docker-maintenance-prune.service
+  register: cleanup_docker_maintenance_prune_service_file
+  tags: &cleanup_verify_tags
+    - verify
+    - cleanup_system
+    - cleanup
+    - operations_loop
+    - phase8
+
+- name: "[Cleanup] Assert docker-maintenance-prune.service file exists"
+  ansible.builtin.assert:
+    that:
+      - cleanup_docker_maintenance_prune_service_file.stat.exists
+    msg: docker-maintenance-prune.service file does not exist!
+  tags: *cleanup_verify_tags
+
+- name: "[Cleanup] Verify docker-maintenance-prune.timer exists"
+  ansible.builtin.stat:
+    path: /etc/systemd/system/docker-maintenance-prune.timer
+  register: cleanup_docker_maintenance_prune_timer_file
+  tags: *cleanup_verify_tags
+
+- name: "[Cleanup] Assert docker-maintenance-prune.timer file exists"
+  ansible.builtin.assert:
+    that:
+      - cleanup_docker_maintenance_prune_timer_file.stat.exists
+    msg: docker-maintenance-prune.timer file does not exist!
+  tags: *cleanup_verify_tags
+
+- name: "[Cleanup] Verify system-maintenance-reboot.service exists"
+  ansible.builtin.stat:
+    path: /etc/systemd/system/system-maintenance-reboot.service
+  register: cleanup_system_maintenance_reboot_service_file
+  tags: *cleanup_verify_tags
+
+- name: "[Cleanup] Assert system-maintenance-reboot.service file exists"
+  ansible.builtin.assert:
+    that:
+      - cleanup_system_maintenance_reboot_service_file.stat.exists
+    msg: system-maintenance-reboot.service file does not exist!
+  tags: *cleanup_verify_tags
+
+- name: "[Cleanup] Verify system-maintenance-reboot.timer exists"
+  ansible.builtin.stat:
+    path: /etc/systemd/system/system-maintenance-reboot.timer
+  register: cleanup_system_maintenance_reboot_timer_file
+  tags: *cleanup_verify_tags
+
+- name: "[Cleanup] Assert system-maintenance-reboot.timer file exists"
+  ansible.builtin.assert:
+    that:
+      - cleanup_system_maintenance_reboot_timer_file.stat.exists
+    msg: system-maintenance-reboot.timer file does not exist!
+  tags: *cleanup_verify_tags

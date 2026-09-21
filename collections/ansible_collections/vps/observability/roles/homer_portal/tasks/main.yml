@@ -1,0 +1,11 @@
+---
+- name: 检查 homer_portal 角色启用状态
+  ansible.builtin.debug:
+    msg: "Homer portal is enabled: {{ homer_portal_enabled }}"
+  when: homer_portal_enabled | default(true) | bool
+  tags: [deploy, observability, homer_portal, phase6]
+
+- name: 部署 Homer 门户站点
+  ansible.builtin.import_tasks: deploy.yml
+  when: homer_portal_enabled | default(true) | bool
+  tags: [deploy, observability, homer_portal, phase6]

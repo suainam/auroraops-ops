@@ -1,0 +1,27 @@
+[Unit]
+Description=CF Server Monitor Probe Agent
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+{% if cf_probe_environment is defined and cf_probe_environment %}
+{% for key, value in cf_probe_environment.items() %}
+Environment="{{ key }}={{ value }}"
+{% endfor %}
+{% endif %}
+Type=simple
+ExecStart={{ cf_probe_install_dir }}/cf-probe run -debug={{ cf_probe_debug }}
+Restart=always
+RestartSec=5
+User=root
+Group=root
+Nice=19
+CPUSchedulingPolicy=other
+IOSchedulingClass=idle
+IOSchedulingPriority=7
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cf-probe
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+---
+- name: Rollback github workflow configuration
+  ansible.builtin.debug:
+    msg: "Rollback logic for workflow role: workflows are managed via templates. Re-run previous version to rollback."
+  tags:
+    - rollback
+    - ci_cd
+    - workflow
+    - phase9

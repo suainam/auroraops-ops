@@ -1,0 +1,388 @@
+---
+# Rustic Restore Tasks
+# 恢复逻辑: 数据库全覆盖，Docker 增量更新
+# 执行流程: 恢复快照 -> 恢复数据库 -> 恢复 Docker 应用
+#
+# 标签规范:
+# - rustic_restore: 主入口（保留兼容性）
+# - rustic_restore_snapshot: 仅恢复快照
+# - rustic_restore_postgresql: 恢复 PostgreSQL
+# - rustic_restore_redis: 恢复 Redis
+# - rustic_restore_docker_apps: 恢复所有 Docker 应用
+# - rustic_restore_docker_apps_<app>: 通过 rustic_restore_docker_app 变量恢复单个应用
+
+- name: 检查必需变量
+  ansible.builtin.assert:
+    that:
+      - rustic_restore_source is defined
+      - rustic_restore_target_dir is defined
+    fail_msg: "必需变量未定义: rustic_restore_source, rustic_restore_target_dir"
+  tags: [restore, operations_loop, rustic, rustic_restore, phase7]
+
+# ======================================================================
+# 步骤 1: 恢复快照到临时目录
+# ======================================================================
+
+- name: 调试 Rustic 变量
+  ansible.builtin.debug:
+    msg:
+      - "Snapshot: {{ rustic_restore_snapshot }}"
+      - "Is Latest: {{ rustic_restore_latest }}"
+      - "Latest Bool: {{ rustic_restore_latest | default(true) | bool }}"
+  tags: [restore, operations_loop, rustic, rustic_restore_snapshot, rustic_restore, phase7]
+
+- name: 创建目标恢复目录 (清理旧数据)
+  ansible.builtin.file:
+    path: "{{ rustic_restore_target_dir }}"
+    state: absent
+  when: rustic_restore_action | default('restore') != 'list_snapshots'
+  tags: [restore, operations_loop, rustic, rustic_restore_snapshot, rustic_restore, phase7]
+
+- name: 重新创建目标恢复目录
+  ansible.builtin.file:
+    path: "{{ rustic_restore_target_dir }}"
+    state: directory
+    mode: "0755"
+  when: rustic_restore_action | default('restore') != 'list_snapshots'
+  tags: [restore, operations_loop, rustic, rustic_restore_snapshot, rustic_restore, phase7]
+
+- name: 从云端恢复快照
+  ansible.builtin.shell: |
+    export RUSTIC_PASSWORD="{{ vault_rustic_password }}"
+    export HOME="/root"
+    export XDG_CACHE_HOME="/root/.cache"
+    export RCLONE_CONFIG="/root/.config/rclone/rclone.conf"
+    {% if rustic_restore_latest | default(true) | bool %}
+    rustic -r "rclone:{{ rustic_restore_source }}:{{ backup_cloud_prefix }}/complete" \
+      restore latest \
+      "{{ rustic_restore_target_dir }}"
+    {% else %}
+    rustic -r "rclone:{{ rustic_restore_source }}:{{ backup_cloud_prefix }}/complete" \
+      restore "{{ rustic_restore_snapshot }}" \
+      "{{ rustic_restore_target_dir }}"
+    {% endif %}
+  args:
+    executable: /bin/bash
+  register: rustic_restore_result
+  changed_when: rustic_restore_result.rc == 0
+  when: rustic_restore_action | default('restore') != 'list_snapshots'
+  tags: [restore, operations_loop, rustic, rustic_restore_snapshot, rustic_restore, phase7]
+
+# ======================================================================
+# 步骤 2: 恢复数据库 (全覆盖)
+# ======================================================================
+
+- name: 恢复数据库 - PostgreSQL
+  when: rustic_restore_databases | default(false) | bool
+  tags: [restore, operations_loop, rustic, rustic_restore_postgresql, rustic_restore, phase7]
+  block:
+    - name: 查找 PostgreSQL SQL 备份文件
+      ansible.builtin.find:
+        paths:
+          - "{{ rustic_restore_target_dir }}/opt/dockers"
+          - "{{ rustic_restore_target_dir }}/tmp"
+        patterns: ["postgresql_all_dbs.sql"]
+      register: rustic_pg_backup_file
+
+    - name: 导入 PostgreSQL 数据库 (全覆盖)
+      ansible.builtin.shell: |
+        sudo -u postgres psql -c "SELECT 1" > /dev/null 2>&1 && \
+        sudo -u postgres psql -f "{{ rustic_pg_backup_file.files[0].path }}" 2>&1
+      when: rustic_pg_backup_file.files | length > 0
+      register: rustic_pg_restore_result
+      changed_when: rustic_pg_restore_result.rc == 0
+
+    - name: 显示 PostgreSQL 恢复结果
+      ansible.builtin.debug:
+        msg: "PostgreSQL 数据库恢复成功 (全覆盖)"
+      when: rustic_pg_restore_result.rc == 0
+
+- name: 恢复数据库 - Redis
+  when: rustic_restore_databases | default(false) | bool
+  tags: [restore, operations_loop, rustic, rustic_restore_redis, rustic_restore, phase7]
+  block:
+    - name: 查找 Redis RDB 备份文件
+      ansible.builtin.find:
+        paths:
+          - "{{ rustic_restore_target_dir }}/var/lib/redis"
+          - "{{ rustic_restore_target_dir }}/opt/dockers"
+        patterns: ["dump.rdb"]
+      register: rustic_redis_backup_file
+
+    - name: 停止 Redis 服务
+      ansible.builtin.systemd:
+        name: redis-server
+        state: stopped
+      when: rustic_redis_backup_file.files | length > 0
+
+    - name: 复制 Redis RDB 文件 (全覆盖)
+      ansible.builtin.copy:
+        src: "{{ rustic_redis_backup_file.files[0].path }}"
+        dest: "/var/lib/redis/dump.rdb"
+        owner: redis
+        group: redis
+        mode: "0640"
+        remote_src: true
+      when: rustic_redis_backup_file.files | length > 0
+
+    - name: 启动 Redis 服务
+      ansible.builtin.systemd:
+        name: redis-server
+        state: started
+      when: rustic_redis_backup_file.files | length > 0
+
+    - name: 显示 Redis 恢复结果
+      ansible.builtin.debug:
+        msg: "Redis 数据库恢复成功 (全覆盖)"
+
+# ======================================================================
+# 步骤 3: 恢复 Docker 应用 (增量更新)
+# ======================================================================
+
+- name: 恢复所有 Docker 应用数据 (增量更新)
+  when: rustic_restore_docker_apps | default(false) | bool and (rustic_restore_docker_app is not defined or rustic_restore_docker_app | length == 0)
+  tags: [restore, operations_loop, rustic, rustic_restore_docker_apps, rustic_restore, phase7]
+  block:
+    - name: 查找 Docker 应用目录
+      ansible.builtin.find:
+        paths: "{{ rustic_restore_target_dir }}/opt/dockers"
+        file_type: directory
+        depth: 1
+      register: rustic_docker_apps_found
+
+    - name: 同步 Docker 应用数据 (rsync 增量更新 - 强制覆盖)
+      become: true
+      ansible.posix.synchronize:
+        src: "{{ rustic_restore_target_dir }}/opt/dockers/"
+        dest: /opt/dockers/
+        archive: true
+        rsync_opts:
+          - --ignore-times
+          - --exclude=*.log
+          - --exclude=logs/*
+      delegate_to: "{{ inventory_hostname }}"
+      register: rustic_docker_apps_sync_result
+
+    - name: Resolve whether restored Docker app permissions need repair
+      ansible.builtin.set_fact:
+        rustic_docker_apps_permissions_required: >-
+          {{ rustic_docker_apps_sync_result.changed | default(false) | bool }}
+
+    - name: 修复 Docker 应用权限
+      ansible.builtin.file:
+        path: "/opt/dockers"
+        owner: "{{ docker_user_uid | default('1000') }}"
+        group: "{{ docker_user_gid | default('1000') }}"
+        mode: "0755"
+        recurse: true
+      when: rustic_docker_apps_permissions_required | bool
+
+    - name: 显示 Docker 应用恢复结果
+      ansible.builtin.debug:
+        msg:
+          - "Docker 应用恢复成功 (增量更新)"
+          - "已同步: {{ rustic_docker_apps_found.files | length }} 个应用"
+          - "建议操作: docker restart <app_name>"
+
+- name: 恢复单个 Docker 应用数据 (精准数据覆盖)
+  when: rustic_restore_docker_apps | default(false) | bool and rustic_restore_docker_app is defined and rustic_restore_docker_app | length > 0
+  tags: [restore, operations_loop, rustic, rustic_restore_docker_apps, rustic_restore, phase7]
+  block:
+    - name: 验证应用名称变量
+      ansible.builtin.assert:
+        that:
+          - rustic_restore_docker_app is defined
+          - rustic_restore_docker_app | length > 0
+        fail_msg: "必须指定 rustic_restore_docker_app 变量（如 gcli2api, sillytavern）"
+      tags: [restore, operations_loop, rustic, rustic_restore_docker_apps, rustic_restore, phase7]
+
+    - name: 读取应用备份清单
+      ansible.builtin.set_fact:
+        rustic_app_manifest: "{{ docker_backup_manifest[rustic_restore_docker_app] | default({'seeds': [], 'data': []}) }}"
+      tags: [restore, operations_loop, rustic, rustic_restore_docker_apps, rustic_restore, phase7]
+
+    - name: 检查应用目录是否存在
+      ansible.builtin.stat:
+        path: "{{ rustic_restore_target_dir }}/opt/dockers/{{ rustic_restore_docker_app }}"
+      register: rustic_app_dir_stat
+      tags: [restore, operations_loop, rustic, rustic_restore_docker_apps, rustic_restore, phase7]
+
+    - name: 检查单个 Docker 应用容器
+      become: true
+      community.docker.docker_container_info:
+        name: "{{ rustic_restore_docker_app }}"
+      register: rustic_restore_container_info
+      tags: [restore, operations_loop, rustic, rustic_restore_docker_apps, rustic_restore, phase7]
+
+    - name: 停止单个 Docker 应用
+      become: true
+      community.docker.docker_container:
+        name: "{{ rustic_restore_docker_app }}"
+        state: stopped
+      when: rustic_restore_container_info.exists | default(false) | bool
+      tags: [restore, operations_loop, rustic, rustic_restore_docker_apps, rustic_restore, phase7]
+
+    # 1. 恢复 Seeds (配置文件) - 强制覆盖
+    - name: 恢复应用配置文件 (Seeds)
+      become: true
+      ansible.posix.synchronize:
+        src: "{{ rustic_restore_target_dir }}/opt/dockers/{{ rustic_restore_docker_app }}/{{ item }}"
+        dest: "/opt/dockers/{{ rustic_restore_docker_app }}/{{ item | dirname }}"
+        archive: true
+        rsync_opts:
+          - --ignore-times
+      delegate_to: "{{ inventory_hostname }}"
+      loop: "{{ rustic_app_manifest.seeds }}"
+      when: rustic_app_dir_stat.stat.exists and rustic_app_manifest.seeds | length > 0
+      register: rustic_restore_seeds_result
+      tags: [restore, operations_loop, rustic, rustic_restore_docker_apps, rustic_restore, phase7]
+
+    # 2. 恢复 Data (数据目录) - 镜像同步 (Delete excluded)
+    - name: 恢复应用数据目录 (Data)
+      ansible.builtin.shell: |
+        if [ -d "{{ rustic_restore_target_dir }}/opt/dockers/{{ rustic_restore_docker_app }}/{{ item }}" ]; then
+          rsync -avt --ignore-times --delete \
+            "{{ rustic_restore_target_dir }}/opt/dockers/{{ rustic_restore_docker_app }}/{{ item }}/" \
+            "/opt/dockers/{{ rustic_restore_docker_app }}/{{ item }}/"
+        fi
+      args:
+        executable: /bin/bash
+      loop: "{{ rustic_app_manifest.data }}"
+      when: rustic_app_dir_stat.stat.exists and rustic_app_manifest.data | length > 0
+      register: rustic_restore_data_result
+      changed_when: "'sent' in rustic_restore_data_result.stdout"
+      tags: [restore, operations_loop, rustic, rustic_restore_docker_apps, rustic_restore, phase7]
+
+    # 3. 兜底策略: 如果清单为空且目录简单 (如 gcli2api), 恢复整个目录但排除日志
+    - name: 恢复通用应用目录 (Fallback)
+      become: true
+      ansible.posix.synchronize:
+        src: "{{ rustic_restore_target_dir }}/opt/dockers/{{ rustic_restore_docker_app }}/"
+        dest: "/opt/dockers/{{ rustic_restore_docker_app }}/"
+        archive: true
+        rsync_opts:
+          - --ignore-times
+          - --exclude=*.log
+          - --exclude=logs/*
+      delegate_to: "{{ inventory_hostname }}"
+      when: rustic_app_dir_stat.stat.exists and (rustic_app_manifest.seeds | length == 0 and rustic_app_manifest.data | length == 0)
+      register: rustic_restore_fallback_result
+      tags: [restore, operations_loop, rustic, rustic_restore_docker_apps, rustic_restore, phase7]
+
+    - name: 修复单个应用权限
+      ansible.builtin.file:
+        path: "/opt/dockers/{{ rustic_restore_docker_app }}"
+        owner: "{{ docker_user_uid | default('1000') }}"
+        group: "{{ docker_user_gid | default('1000') }}"
+        mode: "0755"
+        recurse: true
+      tags: [restore, operations_loop, rustic, rustic_restore_docker_apps, rustic_restore, phase7]
+
+    - name: 启动单个 Docker 应用
+      become: true
+      community.docker.docker_container:
+        name: "{{ rustic_restore_docker_app }}"
+        state: started
+      when:
+        - rustic_restore_container_info.exists | default(false) | bool
+        - not (rustic_restore_no_start | default(false) | bool)
+      tags: [restore, operations_loop, rustic, rustic_restore_docker_apps, rustic_restore, phase7]
+
+    - name: 显示单个应用恢复结果
+      ansible.builtin.debug:
+        msg:
+          - "Docker 应用 {{ rustic_restore_docker_app }} 恢复成功 (精准模式)"
+          - "Seeds 恢复: {{ '是' if rustic_restore_seeds_result.changed | default(false) else '否' }}"
+          - "Data 恢复: {{ '是' if rustic_restore_data_result.changed | default(false) else '否' }}"
+          - "Fallback 恢复: {{ '是' if rustic_restore_fallback_result.changed | default(false) else '否' }}"
+          - "已执行: 停机 -> 恢复 -> 权限修正 -> 启动"
+
+# ======================================================================
+# 步骤 4: 恢复系统配置 (增量更新)
+# ======================================================================
+
+- name: 恢复系统配置 (增量更新)
+  when: rustic_restore_system | default(false) | bool
+  tags: [restore, operations_loop, rustic, rustic_restore_system, rustic_restore, phase7]
+  block:
+    - name: 同步 SSH 配置
+      ansible.builtin.shell: |
+        if [ -d "{{ rustic_restore_target_dir }}/etc/ssh" ]; then
+          rsync -auvt --exclude='ssh_host_*_key*' \
+            "{{ rustic_restore_target_dir }}/etc/ssh/" \
+            "/etc/ssh/"
+        fi
+      args:
+        executable: /bin/bash
+      register: rustic_ssh_restore_result
+      changed_when: "'sending' in rustic_ssh_restore_result.stdout"
+
+    - name: 同步 Nginx 配置
+      ansible.builtin.shell: |
+        if [ -d "{{ rustic_restore_target_dir }}/etc/nginx" ]; then
+          rsync -auvt "{{ rustic_restore_target_dir }}/etc/nginx/" "/etc/nginx/"
+        fi
+      args:
+        executable: /bin/bash
+      register: rustic_nginx_restore_result
+      changed_when: "'sending' in rustic_nginx_restore_result.stdout"
+
+    - name: 同步 systemd 服务配置
+      ansible.builtin.shell: |
+        if [ -d "{{ rustic_restore_target_dir }}/etc/systemd/system" ]; then
+          rsync -auvt --exclude='*.wants' --exclude='*.requires' \
+            "{{ rustic_restore_target_dir }}/etc/systemd/system/" \
+            "/etc/systemd/system/"
+          systemctl daemon-reload
+        fi
+      args:
+        executable: /bin/bash
+      register: rustic_systemd_restore_result
+      changed_when: "'sending' in rustic_systemd_restore_result.stdout"
+
+    - name: 同步 rclone 配置
+      ansible.builtin.shell: |
+        if [ -f "{{ rustic_restore_target_dir }}/root/.config/rclone/rclone.conf" ]; then
+          mkdir -p /root/.config/rclone
+          rsync -auvt "{{ rustic_restore_target_dir }}/root/.config/rclone/rclone.conf" \
+            "/root/.config/rclone/rclone.conf"
+        fi
+      args:
+        executable: /bin/bash
+      register: rustic_rclone_restore_result
+      changed_when: "'sending' in rustic_rclone_restore_result.stdout"
+
+    - name: 显示系统配置恢复结果
+      ansible.builtin.debug:
+        msg:
+          - "系统配置恢复成功 (增量更新)"
+          - "SSH: {{ 'OK' if rustic_ssh_restore_result.changed else 'SKIP' }}"
+          - "Nginx: {{ 'OK' if rustic_nginx_restore_result.changed else 'SKIP' }}"
+          - "systemd: {{ 'OK' if rustic_systemd_restore_result.changed else 'SKIP' }}"
+          - "rclone: {{ 'OK' if rustic_rclone_restore_result.changed else 'SKIP' }}"
+
+# ======================================================================
+# 快照查询
+# ======================================================================
+
+- name: 查询 Rustic 快照列表
+  when: rustic_restore_action is defined and rustic_restore_action == "list_snapshots"
+  tags: [restore, operations_loop, rustic, rustic_restore, phase7]
+  block:
+    - name: 列出所有快照
+      ansible.builtin.shell: |
+        export RUSTIC_PASSWORD="{{ vault_rustic_password }}"
+        export RCLONE_CONFIG="/root/.config/rclone/rclone.conf"
+        {% if rustic_restore_source == 'local' %}
+        rustic -r "{{ backup_base_dir }}/complete" snapshots
+        {% else %}
+        rustic -r "rclone:{{ rustic_restore_source }}:{{ backup_cloud_prefix }}/complete" snapshots
+        {% endif %}
+      args:
+        executable: /bin/bash
+      register: rustic_snapshots_result
+      changed_when: false
+
+    - name: 显示快照列表
+      ansible.builtin.debug:
+        msg: "{{ rustic_snapshots_result.stdout_lines }}"

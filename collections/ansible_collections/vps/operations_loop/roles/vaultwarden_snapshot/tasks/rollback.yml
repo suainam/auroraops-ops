@@ -1,0 +1,53 @@
+---
+- name: Check Vaultwarden snapshot units before rollback
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "/etc/systemd/system/{{ vaultwarden_snapshot_service_name }}.service"
+    - "/etc/systemd/system/{{ vaultwarden_snapshot_service_name }}.timer"
+  register: vaultwarden_snapshot_rollback_units
+  tags: [rollback, operations_loop, vaultwarden_snapshot, phase7]
+
+- name: Stop and disable Vaultwarden snapshot timer
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ vaultwarden_snapshot_service_name }}.timer"
+    enabled: false
+    state: stopped
+  when: vaultwarden_snapshot_rollback_units.results[1].stat.exists
+  tags: [rollback, operations_loop, vaultwarden_snapshot, phase7]
+
+- name: Stop Vaultwarden snapshot service
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ vaultwarden_snapshot_service_name }}.service"
+    enabled: false
+    state: stopped
+  when: vaultwarden_snapshot_rollback_units.results[0].stat.exists
+  tags: [rollback, operations_loop, vaultwarden_snapshot, phase7]
+
+- name: Remove Vaultwarden snapshot managed files
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "/etc/systemd/system/{{ vaultwarden_snapshot_service_name }}.timer"
+    - "/etc/systemd/system/{{ vaultwarden_snapshot_service_name }}.service"
+    - "{{ vaultwarden_snapshot_script_path }}"
+  tags: [rollback, operations_loop, vaultwarden_snapshot, phase7]
+
+- name: Reload systemd after Vaultwarden snapshot rollback
+  become: true
+  ansible.builtin.systemd:
+    daemon_reload: true
+  tags: [rollback, operations_loop, vaultwarden_snapshot, phase7]
+
+- name: Remove Vaultwarden snapshot data only when explicitly requested
+  become: true
+  ansible.builtin.file:
+    path: "{{ vaultwarden_snapshot_root }}"
+    state: absent
+  when: vaultwarden_snapshot_rollback_remove_snapshots | bool
+  tags: [rollback, operations_loop, vaultwarden_snapshot, phase7]

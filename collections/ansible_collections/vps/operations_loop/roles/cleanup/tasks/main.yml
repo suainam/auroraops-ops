@@ -1,0 +1,149 @@
+---
+- name: Check Docker daemon availability for Cleanup
+  become: true
+  community.docker.docker_host_info:
+  register: cleanup_docker_host_info
+  changed_when: false
+  failed_when: false
+  when: auroraops_roles['operations_loop']['cleanup'] | default(true) | bool
+  tags:
+    - deploy
+    - cleanup_preflight
+    - cleanup
+    - operations_loop
+    - phase8
+
+- name: Assert Docker daemon is available for Cleanup
+  ansible.builtin.assert:
+    that:
+      - cleanup_docker_host_info.can_talk_to_docker | default(false)
+    fail_msg: >-
+      Cleanup requires an installed and running Docker daemon.
+      Deploy services.docker first.
+  when: auroraops_roles['operations_loop']['cleanup'] | default(true) | bool
+  tags:
+    - deploy
+    - cleanup_preflight
+    - cleanup
+    - operations_loop
+    - phase8
+
+- name: Role is disabled, skipping
+  ansible.builtin.debug:
+    msg: Role cleanup is disabled, skipping
+  when: not (auroraops_roles['operations_loop']['cleanup'] | default(true) | bool)
+  tags:
+    - deploy
+    - cleanup
+    - operations_loop
+    - phase8
+
+- name: Role is enabled, executing Cleanup tasks
+  ansible.builtin.debug:
+    msg: Executing cleanup role tasks
+  when: auroraops_roles['operations_loop']['cleanup'] | default(true) | bool
+  tags:
+    - deploy
+    - cleanup
+    - operations_loop
+    - phase8
+
+- name: Deploy Docker prune script
+  become: true
+  ansible.builtin.copy:
+    src: docker-prune.py
+    dest: /usr/local/bin/docker-prune.py
+    owner: root
+    group: root
+    mode: "0755"
+  when: auroraops_roles['operations_loop']['cleanup'] | default(true) | bool
+  tags:
+    - deploy
+    - cleanup_system
+    - cleanup
+    - operations_loop
+    - phase8
+
+- name: Create Docker maintenance prune service
+  ansible.builtin.include_role:
+    name: vps.applications.application_service
+  vars:
+    app_service_name: docker-maintenance-prune
+    app_service_description: Docker Maintenance Prune Service
+    app_service_exec_start: "{{ python_executor }} /usr/local/bin/docker-prune.py"
+    app_service_type: oneshot
+    app_service_restart: "no"
+    app_service_restart_on_change: false
+    app_service_enabled: false
+    app_service_state: stopped
+    app_service_user: root
+    app_service_group: root
+    app_service_environment:
+      - KEEP_IMAGES={{ cleanup_docker_prune_keep_images | join(',') }}
+      - CLEANUP_NPM={{ cleanup_npm | lower }}
+      - CLEANUP_CAMOUFOX={{ cleanup_camoufox | lower }}
+      - CLEANUP_BUN={{ cleanup_bun | lower }}
+      - CLEANUP_APT={{ cleanup_apt | lower }}
+      - CLEANUP_PIP={{ cleanup_pip | lower }}
+      - CLEANUP_JOURNAL_DAYS={{ cleanup_journal_days }}
+      - CLEANUP_TMP_DAYS={{ cleanup_tmp_days }}
+  when: auroraops_roles['operations_loop']['cleanup'] | default(true) | bool
+  tags:
+    - deploy
+    - cleanup_system
+    - cleanup
+    - operations_loop
+    - phase8
+
+- name: Create Docker maintenance prune timer
+  ansible.builtin.include_role:
+    name: vps.applications.application_timer
+  vars:
+    app_timer_name: docker-maintenance-prune
+    app_timer_description: Docker Maintenance Prune Timer
+    app_timer_on_calendar: "{{ cleanup_docker_prune_timer_on_calendar }}"
+    app_timer_randomized_delay: 30m
+  when: auroraops_roles['operations_loop']['cleanup'] | default(true) | bool
+  tags:
+    - deploy
+    - operations_loop
+    - cleanup
+    - phase8
+
+- name: Create scheduled system reboot service
+  ansible.builtin.include_role:
+    name: vps.applications.application_service
+  vars:
+    app_service_name: system-maintenance-reboot
+    app_service_description: System Maintenance Reboot Service
+    app_service_exec_start: /usr/bin/systemctl reboot
+    app_service_type: oneshot
+    app_service_restart: "no"
+    app_service_restart_on_change: false
+    app_service_user: root
+    app_service_group: root
+    app_service_enabled: false
+    app_service_state: stopped
+  when: auroraops_roles['operations_loop']['cleanup'] | default(true) | bool
+  tags:
+    - deploy
+    - cleanup_system
+    - cleanup
+    - operations_loop
+    - phase8
+
+- name: Create scheduled system reboot timer
+  ansible.builtin.include_role:
+    name: vps.applications.application_timer
+  vars:
+    app_timer_name: system-maintenance-reboot
+    app_timer_description: System Maintenance Reboot Timer
+    app_timer_on_calendar: "{{ cleanup_system_reboot_timer_on_calendar }}"
+    app_timer_randomized_delay: 0h
+  when: auroraops_roles['operations_loop']['cleanup'] | default(true) | bool
+  tags:
+    - deploy
+    - cleanup_system
+    - cleanup
+    - operations_loop
+    - phase8

@@ -1,0 +1,217 @@
+@charset "UTF-8";
+
+/* ==========================================================================
+   Modern Glassmorphism & Cyber-Clean Aesthetic Theme for Homer
+   ========================================================================== */
+
+/* Font & Base smoothing */
+html, body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji" !important;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.01em;
+}
+
+/* Background Mesh Gradients */
+body #app.dark {
+  background: radial-gradient(at 0% 0%, #1e1b4b 0px, transparent 50%),
+              radial-gradient(at 100% 0%, #0f172a 0px, transparent 50%),
+              radial-gradient(at 50% 100%, #030712 0px, #0f172a 100%) !important;
+  background-attachment: fixed !important;
+  min-height: 100vh;
+}
+
+body #app.light {
+  background: radial-gradient(at 0% 0%, #e0e7ff 0px, transparent 50%),
+              radial-gradient(at 100% 0%, #f0fdf4 0px, transparent 50%),
+              radial-gradient(at 50% 100%, #f8fafc 0px, #f1f5f9 100%) !important;
+  background-attachment: fixed !important;
+  min-height: 100vh;
+}
+
+/* Navbar: Translucent Frosted Glass */
+body #app header.hero {
+  background: rgba(15, 23, 42, 0.45) !important;
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+  transition: all 0.3s ease;
+}
+
+body #app.light header.hero {
+  background: rgba(255, 255, 255, 0.65) !important;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+}
+
+/* Title styling */
+header .title {
+  font-weight: 800 !important;
+  letter-spacing: -0.03em !important;
+  background: linear-gradient(135deg, #60a5fa 0%, #a855f7 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+body #app.light header .title {
+  background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+header .subtitle {
+  font-weight: 500 !important;
+  opacity: 0.85;
+}
+
+/* Search bar styling */
+.search-input {
+  border-radius: 9999px !important;
+  backdrop-filter: blur(12px) !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+body #app.dark .search-input input {
+  background: rgba(30, 41, 59, 0.6) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  color: #f8fafc !important;
+  border-radius: 9999px !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2) !important;
+}
+
+body #app.dark .search-input input:focus {
+  background: rgba(30, 41, 59, 0.9) !important;
+  border-color: #60a5fa !important;
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.25) !important;
+}
+
+body #app.light .search-input input {
+  background: rgba(255, 255, 255, 0.8) !important;
+  border: 1px solid rgba(0, 0, 0, 0.1) !important;
+  border-radius: 9999px !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05) !important;
+}
+
+/* Service group section titles */
+.headline {
+  font-weight: 700 !important;
+  font-size: 1.25rem !important;
+  letter-spacing: -0.02em;
+  margin-top: 1.5rem !important;
+  margin-bottom: 1rem !important;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.headline i {
+  color: #60a5fa;
+}
+
+body #app.light .headline i {
+  color: #2563eb;
+}
+
+/* Cards: Frosted Glass / Neo-Modern */
+body #app .card {
+  border-radius: 16px !important;
+  overflow: hidden;
+  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1),
+              box-shadow 0.25s cubic-bezier(0.34, 1.56, 0.64, 1),
+              border-color 0.25s ease !important;
+  position: relative;
+}
+
+body #app.dark .card {
+  background: rgba(30, 41, 59, 0.55) !important;
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25) !important;
+}
+
+body #app.dark .card:hover {
+  transform: translateY(-5px) scale(1.01) !important;
+  background: rgba(30, 41, 59, 0.8) !important;
+  border-color: rgba(96, 165, 250, 0.45) !important;
+  box-shadow: 0 12px 30px -4px rgba(0, 0, 0, 0.4),
+              0 0 20px rgba(96, 165, 250, 0.15) !important;
+}
+
+body #app.light .card {
+  background: rgba(255, 255, 255, 0.75) !important;
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.8) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04) !important;
+}
+
+body #app.light .card:hover {
+  transform: translateY(-5px) scale(1.01) !important;
+  background: rgba(255, 255, 255, 0.95) !important;
+  border-color: rgba(37, 99, 235, 0.3) !important;
+  box-shadow: 0 12px 30px -4px rgba(0, 0, 0, 0.1),
+              0 0 20px rgba(37, 99, 235, 0.1) !important;
+}
+
+/* Card titles and subtitles */
+.card .title {
+  font-weight: 700 !important;
+  font-size: 1.05rem !important;
+  letter-spacing: -0.01em;
+}
+
+.card .subtitle {
+  font-size: 0.85rem !important;
+  opacity: 0.8;
+  margin-top: 0.25rem !important;
+}
+
+/* Tags and Pills */
+.tag {
+  border-radius: 9999px !important;
+  font-weight: 600 !important;
+  font-size: 0.7rem !important;
+  padding: 0.25rem 0.65rem !important;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* Icons styling */
+.card .media-left .icon {
+  width: 2.75rem !important;
+  height: 2.75rem !important;
+  border-radius: 12px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 1.25rem !important;
+  background: linear-gradient(135deg, rgba(96, 165, 250, 0.15) 0%, rgba(168, 85, 247, 0.15) 100%);
+  color: #60a5fa !important;
+  transition: transform 0.25s ease;
+}
+
+.card:hover .media-left .icon {
+  transform: scale(1.1);
+  color: #93c5fd !important;
+}
+
+body #app.light .card .media-left .icon {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.1) 0%, rgba(124, 58, 237, 0.1) 100%);
+  color: #2563eb !important;
+}
+
+body #app.light .card:hover .media-left .icon {
+  color: #1d4ed8 !important;
+}
+
+/* Footer styling */
+footer.footer {
+  background: transparent !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  margin-top: 4rem;
+  padding: 2rem 1.5rem !important;
+  opacity: 0.75;
+  font-size: 0.875rem;
+}

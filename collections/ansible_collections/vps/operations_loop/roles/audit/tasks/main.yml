@@ -1,0 +1,125 @@
+---
+# 启用控制变量: auroraops_roles['operations_loop']['audit'] (定义在 group_vars/all/roles.yml 和 host_vars/)
+# 默认: true (如需禁用，在 host_vars 中设置为 false)
+
+- name: 角色启用检查
+  ansible.builtin.debug:
+    msg: "Role audit is disabled, skipping"
+  when: not (auroraops_roles['operations_loop']['audit'] | default(true) | bool)
+  tags: [deploy, audit, operations_loop, phase7]
+
+- name: 角色已启用，执行 Audit 任务
+  ansible.builtin.debug:
+    msg: "Executing audit role tasks"
+  when: auroraops_roles['operations_loop']['audit'] | default(true) | bool
+  tags: [deploy, audit, operations_loop, phase7]
+
+- name: Install unattended-upgrades and apt-listchanges
+  become: true
+  ansible.builtin.apt:
+    name:
+      - unattended-upgrades
+      - apt-listchanges
+    state: present
+  when: auroraops_roles['operations_loop']['audit'] | default(true) | bool
+  tags: [deploy, audit, operations_loop, phase7]
+
+- name: Configure unattended-upgrades (periodic)
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+    owner: root
+    group: root
+    mode: "0644"
+  when: audit_enable_unattended_upgrades and (auroraops_roles['operations_loop']['audit'] | default(true) | bool)
+  tags: [deploy, audit, operations_loop, phase7]
+
+- name: Configure unattended-upgrades (options)
+  become: true
+  ansible.builtin.template:
+    src: 50unattended-upgrades.j2
+    dest: /etc/apt/apt.conf.d/50unattended-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+  when: audit_enable_unattended_upgrades and (auroraops_roles['operations_loop']['audit'] | default(true) | bool)
+  tags: [deploy, audit, operations_loop, phase7]
+
+- name: 安装 Lynis 依赖
+  become: true
+  ansible.builtin.apt:
+    name:
+      - git
+      - curl
+    state: present
+  when: auroraops_roles['operations_loop']['audit'] | default(true) | bool
+  tags: [deploy, audit, audit_security_audit, operations_loop, phase7]
+
+- name: 确保报告目录存在
+  become: true
+  ansible.builtin.file:
+    path: "{{ audit_security_audit_report_dir }}"
+    state: directory
+    mode: "0700"
+  when: auroraops_roles['operations_loop']['audit'] | default(true) | bool
+  tags: [deploy, audit, audit_security_audit, operations_loop, phase7]
+
+- name: 安装 Lynis (从源码获取最新版)
+  become: true
+  ansible.builtin.git:
+    repo: https://github.com/CISOfy/lynis
+    dest: "{{ audit_security_audit_lynis_dir }}"
+    depth: 1
+    version: master
+  when: auroraops_roles['operations_loop']['audit'] | default(true) | bool
+  tags: [deploy, audit, audit_security_audit, operations_loop, phase7]
+
+- name: 创建 Lynis 审计脚本
+  become: true
+  ansible.builtin.copy:
+    content: |
+      #!/bin/bash
+      cd {{ audit_security_audit_lynis_dir }}
+      ./lynis audit system --quick --report-file {{ audit_security_audit_report_dir }}/lynis-report.dat
+      > {{ audit_security_audit_report_dir }}/lynis.log
+    dest: /usr/local/bin/run-security-audit.sh
+    mode: "0700"
+  when: auroraops_roles['operations_loop']['audit'] | default(true) | bool
+  tags: [deploy, audit, audit_security_audit, operations_loop, phase7]
+
+- name: 设置 Lynis 定期审计任务 (systemd timer)
+  ansible.builtin.include_role:
+    name: vps.applications.application_service
+  vars:
+    app_service_name: "security-audit"
+    app_service_description: "Security Audit Service - Lynis"
+    app_service_type: oneshot
+    app_service_exec_start: "/usr/local/bin/run-security-audit.sh"
+    app_service_user: "root"
+    app_service_group: "root"
+    app_service_enabled: true
+    app_service_state: stopped
+  when: auroraops_roles['operations_loop']['audit'] | default(true) | bool
+  tags: [deploy, audit, audit_security_audit, audit_timer_config, operations_loop, phase7]
+
+- name: 配置 Lynis 审计定时器
+  ansible.builtin.include_role:
+    name: vps.applications.application_timer
+  vars:
+    app_timer_name: "security-audit"
+    app_timer_description: "Security Audit Timer - Run Lynis daily"
+    app_timer_on_calendar: "{{ audit_security_audit_timer_schedule }}"
+    app_timer_persistent: true
+  when: auroraops_roles['operations_loop']['audit'] | default(true) | bool
+  tags: [deploy, audit, audit_security_audit, audit_timer_config, operations_loop, phase7]
+
+- name: 确保旧的 Cron 任务已移除
+  become: true
+  ansible.builtin.cron:
+    name: Run Lynis security audit
+    state: absent
+  when: auroraops_roles['operations_loop']['audit'] | default(true) | bool
+  tags: [deploy, audit, audit_security_audit, audit_cleanup, operations_loop, phase7]

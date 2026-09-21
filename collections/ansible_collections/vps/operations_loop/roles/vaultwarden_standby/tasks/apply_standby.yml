@@ -1,0 +1,360 @@
+---
+- name: Install Vaultwarden standby synchronization dependencies
+  become: true
+  ansible.builtin.apt:
+    name:
+      - openssh-client
+      - rsync
+    state: present
+    update_cache: false
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Create Vaultwarden standby service group
+  become: true
+  ansible.builtin.group:
+    name: "{{ vaultwarden_standby_service_group }}"
+    system: true
+    state: present
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Create Vaultwarden standby service user
+  become: true
+  ansible.builtin.user:
+    name: "{{ vaultwarden_standby_service_user }}"
+    group: "{{ vaultwarden_standby_service_group }}"
+    home: "{{ vaultwarden_standby_root }}"
+    shell: /usr/sbin/nologin
+    system: true
+    create_home: false
+    state: present
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Probe Vaultwarden standby service user after planned creation
+  ansible.builtin.command:
+    argv:
+      - getent
+      - passwd
+      - "{{ vaultwarden_standby_service_user }}"
+  register: vaultwarden_standby_service_user_probe
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Resolve Vaultwarden standby ownership for deploy or check mode
+  ansible.builtin.set_fact:
+    vaultwarden_standby_effective_user: >-
+      {{ vaultwarden_standby_service_user if vaultwarden_standby_service_user_probe.rc == 0 else 'root' }}
+    vaultwarden_standby_effective_group: >-
+      {{ vaultwarden_standby_service_group if vaultwarden_standby_service_user_probe.rc == 0 else 'root' }}
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Create Vaultwarden standby directories
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ vaultwarden_standby_effective_user }}"
+    group: "{{ vaultwarden_standby_effective_group }}"
+    mode: "0700"
+  loop:
+    - "{{ vaultwarden_standby_config_dir }}"
+    - "{{ vaultwarden_standby_root }}"
+    - "{{ vaultwarden_standby_root }}/incoming"
+    - "{{ vaultwarden_standby_root }}/snapshots"
+    - "{{ vaultwarden_standby_root }}/state"
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Generate dedicated Vaultwarden standby SSH key when absent
+  become: true
+  ansible.builtin.command:
+    argv:
+      - ssh-keygen
+      - -q
+      - -t
+      - ed25519
+      - -N
+      - ""
+      - -C
+      - "vaultwarden-standby@{{ inventory_hostname }}"
+      - -f
+      - "{{ vaultwarden_standby_ssh_key }}"
+    creates: "{{ vaultwarden_standby_ssh_key }}"
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Enforce Vaultwarden standby SSH key permissions
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: "{{ vaultwarden_standby_effective_user }}"
+    group: "{{ vaultwarden_standby_effective_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ vaultwarden_standby_ssh_key }}"
+      mode: "0600"
+    - path: "{{ vaultwarden_standby_ssh_key }}.pub"
+      mode: "0644"
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Scan Vaultwarden source SSH host key over ZeroTier
+  ansible.builtin.command:
+    argv:
+      - ssh-keyscan
+      - -T
+      - "10"
+      - -p
+      - "{{ vaultwarden_standby_source_port | string }}"
+      - "{{ vaultwarden_standby_source_host }}"
+  register: vaultwarden_standby_source_host_keys
+  check_mode: false
+  changed_when: false
+  failed_when: >-
+    vaultwarden_standby_source_host_keys.rc != 0
+    or vaultwarden_standby_source_host_keys.stdout | trim | length == 0
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Install pinned Vaultwarden source SSH host keys
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ vaultwarden_standby_known_hosts }}"
+    content: "{{ vaultwarden_standby_source_host_keys.stdout_lines | sort | join('\n') }}\n"
+    owner: "{{ vaultwarden_standby_effective_user }}"
+    group: "{{ vaultwarden_standby_effective_group }}"
+    mode: "0600"
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Install Vaultwarden standby CLI
+  become: true
+  ansible.builtin.copy:
+    src: vaultwarden_standby.py
+    dest: "{{ vaultwarden_standby_script_path }}"
+    owner: root
+    group: "{{ vaultwarden_standby_effective_group }}"
+    mode: "0750"
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Install Vaultwarden manual DR CLI
+  become: true
+  ansible.builtin.copy:
+    src: vaultwarden_dr.py
+    dest: "{{ vaultwarden_standby_dr_script_path }}"
+    owner: root
+    group: "{{ vaultwarden_standby_effective_group }}"
+    mode: "0750"
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_dr, phase7]
+
+- name: Create Vaultwarden manual DR state directory
+  become: true
+  ansible.builtin.file:
+    path: "{{ vaultwarden_standby_dr_root }}"
+    state: directory
+    owner: "{{ vaultwarden_standby_effective_user }}"
+    group: "{{ vaultwarden_standby_effective_group }}"
+    mode: "0700"
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_dr, phase7]
+
+- name: Inspect docker_apps managed Vaultwarden cold standby container
+  become: true
+  ansible.builtin.command:
+    argv:
+      - docker
+      - inspect
+      - "{{ vaultwarden_standby_container_name }}"
+  register: vaultwarden_standby_preflight_container
+  check_mode: false
+  changed_when: false
+  failed_when: vaultwarden_standby_preflight_container.rc != 0
+  no_log: true
+  when: not (vaultwarden_standby_snapshot_only | bool)
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Assert docker_apps keeps Vaultwarden cold standby stopped
+  ansible.builtin.assert:
+    that:
+      - (vaultwarden_standby_preflight_container.stdout | from_json)[0].State.Running == false
+      - (vaultwarden_standby_preflight_container.stdout | from_json)[0].HostConfig.RestartPolicy.Name in ['', 'no']
+    fail_msg: >-
+      Deploy services.docker_apps on rasp with Vaultwarden state=stopped and restart_policy=no
+      before enabling standby synchronization.
+  when: not (vaultwarden_standby_snapshot_only | bool)
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+- name: Deploy Vaultwarden standby synchronization service
+  ansible.builtin.include_role:
+    name: vps.applications.application_service
+    apply:
+      become: true
+  vars:
+    app_service_name: "{{ vaultwarden_standby_service_name }}"
+    app_service_description: "Synchronize verified Vaultwarden recovery snapshots"
+    app_service_type: oneshot
+    app_service_exec_start: "{{ python_executor }} {{ vaultwarden_standby_script_path }} sync"
+    app_service_user: "{{ vaultwarden_standby_service_user }}"
+    app_service_group: "{{ vaultwarden_standby_service_group }}"
+    app_service_working_directory: "{{ vaultwarden_standby_root }}"
+    app_service_environment:
+      VAULTWARDEN_STANDBY_ROOT: "{{ vaultwarden_standby_root }}"
+      VAULTWARDEN_STANDBY_SOURCE: "{{ vaultwarden_standby_source_user }}@{{ vaultwarden_standby_source_host }}::{{ vaultwarden_standby_source_module }}/"
+      VAULTWARDEN_STANDBY_SOURCE_PORT: "{{ vaultwarden_standby_source_port }}"
+      VAULTWARDEN_STANDBY_SSH_KEY: "{{ vaultwarden_standby_ssh_key }}"
+      VAULTWARDEN_STANDBY_KNOWN_HOSTS: "{{ vaultwarden_standby_known_hosts }}"
+      VAULTWARDEN_STANDBY_RETENTION: "{{ vaultwarden_standby_retention }}"
+      VAULTWARDEN_STANDBY_CONTAINER: "{{ vaultwarden_standby_container_name }}"
+      VAULTWARDEN_STANDBY_MODE: "{{ 'snapshot-only' if (vaultwarden_standby_snapshot_only | bool) else 'passive' }}"
+      VAULTWARDEN_STANDBY_SNAPSHOT_ONLY: "{{ 'true' if (vaultwarden_standby_snapshot_only | bool) else 'false' }}"
+    app_service_dependencies: >-
+      {{
+        ['network-online.target', 'zerotier-one.service']
+        if (vaultwarden_standby_snapshot_only | bool)
+        else ['network-online.target', 'zerotier-one.service', 'docker.service']
+      }}
+    app_service_requires: >-
+      {{
+        ['zerotier-one.service']
+        if (vaultwarden_standby_snapshot_only | bool)
+        else ['zerotier-one.service', 'docker.service']
+      }}
+    app_service_restart: "no"
+    app_service_enabled: false
+    app_service_state: stopped
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Deploy Vaultwarden standby synchronization timer
+  ansible.builtin.include_role:
+    name: vps.applications.application_timer
+    apply:
+      become: true
+  vars:
+    app_timer_name: "{{ vaultwarden_standby_service_name }}"
+    app_timer_description: "Vaultwarden passive snapshot synchronization every 5 minutes"
+    app_timer_on_calendar: "{{ vaultwarden_standby_timer_calendar }}"
+    app_timer_persistent: true
+    app_timer_randomized_delay: "0"
+    app_timer_enabled: "{{ vaultwarden_standby_timer_enabled | bool }}"
+    app_timer_state: "{{ 'started' if vaultwarden_standby_timer_enabled | bool else 'stopped' }}"
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Stop and disable stale Vaultwarden DR health timer in snapshot-only mode
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ vaultwarden_standby_dr_health_service_name }}.timer"
+    enabled: false
+    state: stopped
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - vaultwarden_standby_snapshot_only | bool
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_dr, phase7]
+
+- name: Stop stale Vaultwarden DR health service in snapshot-only mode
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ vaultwarden_standby_dr_health_service_name }}.service"
+    enabled: false
+    state: stopped
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - vaultwarden_standby_snapshot_only | bool
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_dr, phase7]
+
+- name: Record snapshot-only DR mode
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ vaultwarden_standby_dr_root }}/state/mode.json"
+    content: |
+      {
+        "mode": "snapshot-only",
+        "snapshot_only": true,
+        "promotion_supported": false,
+        "updated_at": "{{ '%Y-%m-%dT%H:%M:%SZ' | strftime }}"
+      }
+    owner: "{{ vaultwarden_standby_effective_user }}"
+    group: "{{ vaultwarden_standby_effective_group }}"
+    mode: "0600"
+  when: vaultwarden_standby_snapshot_only | bool
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_dr, phase7]
+- name: Deploy Vaultwarden primary health monitor service
+  ansible.builtin.include_role:
+    name: vps.applications.application_service
+    apply:
+      become: true
+  vars:
+    app_service_name: "{{ vaultwarden_standby_dr_health_service_name }}"
+    app_service_description: "Check Vaultwarden primary health without automatic failover"
+    app_service_type: oneshot
+    app_service_exec_start: "{{ python_executor }} {{ vaultwarden_standby_dr_script_path }} health-check"
+    app_service_user: root
+    app_service_group: root
+    app_service_working_directory: "{{ vaultwarden_standby_dr_root }}"
+    app_service_environment_file: /etc/health_checks/health_checks.env
+    app_service_environment:
+      VAULTWARDEN_DR_ROOT: "{{ vaultwarden_standby_dr_root }}"
+      VAULTWARDEN_STANDBY_ROOT: "{{ vaultwarden_standby_root }}"
+      VAULTWARDEN_STANDBY_CONTAINER: "{{ vaultwarden_standby_container_name }}"
+      VAULTWARDEN_DR_DATA_DIR: "{{ vaultwarden_standby_dr_data_dir }}"
+      VAULTWARDEN_DR_SYNC_TIMER: "{{ vaultwarden_standby_service_name }}.timer"
+      VAULTWARDEN_DR_MAX_SNAPSHOT_AGE_SECONDS: "{{ vaultwarden_standby_max_age_seconds }}"
+      VAULTWARDEN_DR_HEALTH_FAILURE_THRESHOLD: "{{ vaultwarden_standby_dr_health_failure_threshold }}"
+      VAULTWARDEN_DR_HEALTH_TIMEOUT_SECONDS: "{{ vaultwarden_standby_dr_health_timeout_seconds }}"
+      VAULTWARDEN_DR_PRIMARY_HEALTH_URL: "{{ vaultwarden_standby_dr_primary_health_url }}"
+      VAULTWARDEN_DR_PRIMARY_SSH_HOST: "{{ vaultwarden_standby_dr_primary_ssh_host }}"
+      VAULTWARDEN_DR_PRIMARY_SSH_PORT: "{{ vaultwarden_standby_dr_primary_ssh_port }}"
+      VAULTWARDEN_DR_TUNNEL_READY_URL: "{{ vaultwarden_standby_dr_tunnel_ready_url }}"
+      VAULTWARDEN_DR_LOCAL_HEALTH_URL: "{{ vaultwarden_standby_dr_local_health_url }}"
+      VAULTWARDEN_DR_PUBLIC_HEALTH_URL: "{{ vaultwarden_standby_dr_public_health_url }}"
+      VAULTWARDEN_DR_NOTIFIER_PATH: "{{ vaultwarden_standby_dr_notifier_path }}"
+      VAULTWARDEN_DR_NOTIFIER_PYTHON: "{{ vaultwarden_standby_dr_notifier_python }}"
+      VAULTWARDEN_DR_HOSTNAME: "{{ inventory_hostname }}"
+    app_service_dependencies:
+      - network-online.target
+      - docker.service
+      - cloudflared.service
+    app_service_requires:
+      - docker.service
+      - cloudflared.service
+    app_service_timeout: 60
+    app_service_restart: "no"
+    app_service_enabled: false
+    app_service_state: stopped
+  no_log: true
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_dr, phase7]
+  when: not (vaultwarden_standby_snapshot_only | bool)
+
+- name: Deploy Vaultwarden primary health monitor timer
+  ansible.builtin.include_role:
+    name: vps.applications.application_timer
+    apply:
+      become: true
+  vars:
+    app_timer_name: "{{ vaultwarden_standby_dr_health_service_name }}"
+    app_timer_description: "Check Vaultwarden primary health every minute"
+    app_timer_on_calendar: "{{ vaultwarden_standby_dr_health_timer_calendar }}"
+    app_timer_persistent: true
+    app_timer_randomized_delay: "0"
+    app_timer_enabled: "{{ vaultwarden_standby_dr_health_timer_enabled | bool }}"
+    app_timer_state: "{{ 'started' if vaultwarden_standby_dr_health_timer_enabled | bool else 'stopped' }}"
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_dr, phase7]
+  when: not (vaultwarden_standby_snapshot_only | bool)
+
+- name: Flush Vaultwarden standby unit handlers
+  ansible.builtin.meta: flush_handlers
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Check for an initial valid standby snapshot
+  become: true
+  ansible.builtin.stat:
+    path: "{{ vaultwarden_standby_root }}/latest.json"
+  register: vaultwarden_standby_latest_stat
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
+
+- name: Run initial Vaultwarden standby synchronization
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ vaultwarden_standby_service_name }}.service"
+    state: started
+  when:
+    - not ansible_check_mode
+    - vaultwarden_standby_timer_enabled | bool
+    - vaultwarden_standby_run_initial_sync | bool
+    - not vaultwarden_standby_latest_stat.stat.exists
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]

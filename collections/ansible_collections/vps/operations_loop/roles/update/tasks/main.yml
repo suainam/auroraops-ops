@@ -1,0 +1,257 @@
+# 启用控制变量: auroraops_roles['operations_loop']['update'] (定义在 group_vars/all/roles.yml 和 host_vars/)
+# 默认: true (如需禁用，在 host_vars 中设置为 false)
+
+- name: 角色启用检查
+  ansible.builtin.debug:
+    msg: "Role update is disabled, skipping"
+  when: not (auroraops_roles['operations_loop']['update'] | default(true) | bool)
+  tags: [deploy, update, operations_loop, phase8]
+
+- name: 角色已启用，执行 Update 任务
+  ansible.builtin.debug:
+    msg: "Executing update role tasks"
+  when: auroraops_roles['operations_loop']['update'] | default(true) | bool
+  tags: [deploy, update, operations_loop, phase8]
+
+- name: 更新 APT 缓存
+  become: true
+  ansible.builtin.apt:
+    update_cache: true
+  when: auroraops_roles['operations_loop']['update'] | default(true) | bool
+  tags: [deploy, update, operations_loop, phase8]
+
+- name: 升级所有已安装的软件包
+  become: true
+  ansible.builtin.apt:
+    upgrade: "{{ 'dist' if update_dist_upgrade else 'safe' }}"
+    dpkg_options: force-confdef,force-confold
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  when: update_system_packages and (auroraops_roles['operations_loop']['update'] | default(true) | bool)
+  tags: [deploy, update, operations_loop, phase8]
+
+- name: 移除不再需要的依赖包
+  become: true
+  ansible.builtin.apt:
+    autoremove: true
+  when: update_autoremove and (auroraops_roles['operations_loop']['update'] | default(true) | bool)
+  tags: [deploy, update, operations_loop, phase8]
+
+- name: 检查是否需要重启
+  become: true
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: update_reboot_required_file
+  when: auroraops_roles['operations_loop']['update'] | default(true) | bool
+  tags: [deploy, update, operations_loop, update_reboot, phase8]
+
+- name: 提示需要重启
+  ansible.builtin.debug:
+    msg: 系统更新完成，需要重启以应用更改。
+  when: update_reboot_required_file.stat.exists and (auroraops_roles['operations_loop']['update'] | default(true) | bool)
+  tags: [deploy, update, operations_loop, update_reboot, phase8]
+
+- name: 自动重启系统 (如果配置允许)
+  become: true
+  ansible.builtin.reboot:
+    msg: Ansible 正在执行系统更新后的自动重启
+    reboot_timeout: 600
+  when: update_reboot_if_required and update_reboot_required_file.stat.exists and (auroraops_roles['operations_loop']['update'] | default(true) | bool)
+  tags: [deploy, update, operations_loop, update_reboot, phase8]
+
+- name: 检查关键软件版本建议
+  ansible.builtin.shell: |
+    CURRENT_DIST=$(lsb_release -cs 2>/dev/null || echo "{{ ansible_distribution_release }}")
+    echo "--- 软件与系统版本状态 ---"
+    echo "PostgreSQL 配置版本: {{ postgresql_version | default('未定义') }} (最新推荐: {{ update_recommended_postgresql_version }})"
+    echo "Redis 配置版本: {{ redis_version | default('未定义') }} (最新推荐: {{ update_recommended_redis_version }})"
+    echo "当前 Debian 发行版: $CURRENT_DIST"
+
+    CURRENT_KERNEL=$(uname -r)
+    echo "当前内核版本: $CURRENT_KERNEL (推荐大版本: {{ update_recommended_kernel_major }})"
+
+    if [[ "$CURRENT_KERNEL" != *{{ update_recommended_kernel_major }}* ]]; then
+      echo "[警告] 当前内核 ($CURRENT_KERNEL) 可能不是 {{ update_latest_debian_name }} 的最新首选版本！"
+      echo "[建议] 如果刚完成系统升级，请检查是否已安装最新的 linux-image-amd64 并重启。"
+    else
+      echo "[成功] 内核版本符合预期。"
+    fi
+
+    if [ "$CURRENT_DIST" != "{{ update_latest_debian_release }}" ]; then
+      echo "[警告] 当前系统不是最新的稳定版 {{ update_latest_debian_name }}！"
+      echo "[建议] 请考虑执行系统大版本升级以获取最佳安全支持。"
+    else
+      echo "[成功] 系统已处于最新的稳定版 {{ update_latest_debian_name }}。"
+    fi
+    echo "--------------------------"
+  register: update_version_suggestions
+  changed_when: false
+  when: auroraops_roles['operations_loop']['update'] | default(true) | bool
+  tags: [deploy, update, operations_loop, update_info, phase8]
+
+- name: 显示版本建议
+  ansible.builtin.debug:
+    var: update_version_suggestions.stdout_lines
+  when: auroraops_roles['operations_loop']['update'] | default(true) | bool
+  tags: [deploy, update, operations_loop, update_info, phase8]
+
+- name: Zinit 更新服务
+  ansible.builtin.include_role:
+    name: vps.applications.application_service
+    apply:
+      tags: [update_zinit]
+  vars:
+    app_service_name: '{{ item.name }}'
+    app_service_description: '{{ item.description }}'
+    app_service_exec_start: /usr/bin/zsh -lc 'zinit self-update && zinit update || exit 0'
+    app_service_user: '{{ item.user }}'
+    app_service_group: '{{ item.group | default(item.user) }}'
+    app_service_type: oneshot
+    app_service_timeout: 1800
+    app_service_enabled: false
+    app_service_state: stopped
+    application_service_app_service_timeout: 1800
+    application_service_app_service_enabled: false
+    application_service_app_service_state: stopped
+  loop:
+    - { name: zinit-update-root, description: 'Zinit Update Service (root)', user: root }
+    - { name: zinit-update-admin, description: 'Zinit Update Service (admin)', user: '{{ admin_user }}', group: '{{ admin_user }}' }
+  loop_control:
+    label: '{{ item.name }}'
+  when:
+    - item.user == 'root' or admin_user is defined
+    - >-
+      (auroraops_roles['operations_loop']['update'] | default(true) | bool) or
+      (update_manage_zinit_units | bool)
+  tags: [deploy, update, operations_loop, update_zinit, phase8]
+
+- name: Zinit 定时器
+  ansible.builtin.include_role:
+    name: vps.applications.application_timer
+    apply:
+      tags: [update_zinit]
+  vars:
+    app_timer_name: '{{ item.name }}'
+    app_timer_description: '{{ item.description }}'
+    app_timer_on_calendar: '02:00'
+    app_timer_on_boot_sec: 10m
+    app_timer_randomized_delay: 15m
+    app_timer_persistent: true
+    application_timer_app_timer_on_calendar: '02:00'
+    application_timer_app_timer_on_boot_sec: 10m
+    application_timer_app_timer_randomized_delay: 15m
+    application_timer_app_timer_persistent: true
+  loop:
+    - { name: zinit-update-root, description: 'Zinit Update Timer (root)' }
+    - { name: zinit-update-admin, description: 'Zinit Update Timer (admin)' }
+  loop_control:
+    label: '{{ item.name }}'
+  when:
+    - item.name.endswith('root') or admin_user is defined
+    - >-
+      (auroraops_roles['operations_loop']['update'] | default(true) | bool) or
+      (update_manage_zinit_units | bool)
+  tags: [deploy, update, operations_loop, update_zinit, phase8]
+
+# ===========================================
+# Docker 镜像更新 (拉取已部署容器的最新镜像)
+# ===========================================
+- name: 获取已部署的 Docker 容器列表
+  become: true
+  ansible.builtin.command:
+    argv:
+      - docker
+      - ps
+      - --format
+      - "{% raw %}{{.Image}}{% endraw %}"
+  register: update_docker_deployed_images_raw
+  changed_when: false
+  when:
+    - update_docker_images | default(false) | bool
+    - auroraops_roles['operations_loop']['update'] | default(true) | bool
+  tags: [deploy, update, operations_loop, update_docker, phase8]
+
+- name: Resolve unique deployed Docker images
+  ansible.builtin.set_fact:
+    update_docker_deployed_images: >-
+      {{ update_docker_deployed_images_raw.stdout_lines | default([]) | unique | sort }}
+  when:
+    - update_docker_images | default(false) | bool
+    - auroraops_roles['operations_loop']['update'] | default(true) | bool
+  tags: [deploy, update, operations_loop, update_docker, phase8]
+
+- name: 拉取 Docker 镜像最新版本
+  become: true
+  community.docker.docker_image:
+    name: "{{ item }}"
+    source: pull
+  loop: "{{ update_docker_deployed_images | default([]) }}"
+  loop_control:
+    label: '{{ item }}'
+  when:
+    - update_docker_images | default(false) | bool
+    - update_docker_deployed_images | default([]) | length > 0
+    - auroraops_roles['operations_loop']['update'] | default(true) | bool
+  tags: [deploy, update, operations_loop, update_docker, phase8]
+
+# ===========================================
+# Node.js 全局包更新
+# ===========================================
+- name: 更新 npm 全局包
+  become: true
+  ansible.builtin.command:
+    argv:
+      - npm
+      - update
+      - --global
+  changed_when: true
+  when:
+    - update_nodejs_packages | default(false) | bool
+    - ansible_facts.packages is defined and 'npm' in ansible_facts.packages
+    - auroraops_roles['operations_loop']['update'] | default(true) | bool
+  tags: [deploy, update, operations_loop, update_nodejs, phase8]
+
+- name: 更新 bun 全局包
+  become: true
+  ansible.builtin.command:
+    argv:
+      - bun
+      - update
+      - --global
+  changed_when: true
+  when:
+    - update_nodejs_packages | default(false) | bool
+    - ansible_facts.packages is defined and 'bun' in ansible_facts.packages
+    - auroraops_roles['operations_loop']['update'] | default(true) | bool
+  tags: [deploy, update, operations_loop, update_nodejs, phase8]
+
+# ===========================================
+# Python pip 可升级包报告 (仅报告，不执行)
+# ===========================================
+- name: 检查可升级的 pip 包
+  become: true
+  ansible.builtin.command:
+    argv:
+      - pip
+      - list
+      - --outdated
+      - --format=columns
+  register: update_pip_outdated
+  changed_when: false
+  when:
+    - update_pip_report | default(true) | bool
+    - auroraops_roles['operations_loop']['update'] | default(true) | bool
+  tags: [deploy, update, operations_loop, update_pip, phase8]
+
+- name: 显示可升级的 pip 包
+  ansible.builtin.debug:
+    msg: |
+      === 可升级的 pip 包 ===
+      {% for line in update_pip_outdated.stdout_lines | default([]) %}
+      {{ line }}
+      {% endfor %}
+  when:
+    - update_pip_report | default(true) | bool
+    - update_pip_outdated.stdout_lines | default([]) | length > 0
+    - auroraops_roles['operations_loop']['update'] | default(true) | bool
+  tags: [deploy, update, operations_loop, update_pip, phase8]

@@ -1,0 +1,13 @@
+---
+- name: Render workflow templates
+  ansible.builtin.template:
+    src: "{{ item.template | default(item.name ~ '.j2') }}"
+    dest: "{{ playbook_dir }}/../../{{ workflow_github_workflows_dir }}/{{ item.name }}"
+    mode: "0644"
+  vars:
+    ansible_become: false
+  loop: "{{ workflow_github_workflows_to_deploy }}"
+  delegate_to: localhost
+  run_once: true
+  become: false
+  tags: [deploy, ci_cd, workflow, phase9]

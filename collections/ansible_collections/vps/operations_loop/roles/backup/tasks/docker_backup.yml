@@ -1,0 +1,164 @@
+---
+- name: Ensure Docker backup directories exist
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ docker_backup_base }}/seeds"
+    - "{{ docker_backup_base }}/db"
+    - "{{ docker_backup_base }}/full"
+  when: docker_backup_enabled
+
+  tags:
+    - phase7
+- name: Run Docker config seed backup using existing script
+  ansible.builtin.command:
+    argv:
+      - /root/AuroraOps/scripts/manage_docker_data.sh
+      - config
+  changed_when: true
+  when: docker_backup_enabled
+
+  tags:
+    - phase7
+- name: Run Docker database backup using existing script
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /root/AuroraOps/scripts/manage_docker_data.sh
+      - db
+  changed_when: true
+  when: docker_backup_enabled
+
+  tags:
+    - phase7
+- name: Run Docker full backup using existing script
+  ansible.builtin.command:
+    argv:
+      - /root/AuroraOps/scripts/manage_docker_data.sh
+      - full
+  changed_when: true
+  when: docker_backup_enabled and ansible_date_time.day == "01"
+
+  tags:
+    - phase7
+- name: Find all Docker config backups
+  ansible.builtin.find:
+    paths: "{{ docker_backup_base }}/seeds"
+    patterns: "docker_config_seed_*.tar.gz"
+    file_type: file
+  register: backup_docker_config_backups
+  when: docker_backup_enabled
+
+  tags:
+    - phase7
+- name: Clean up old Docker config backups
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ backup_docker_config_backups.files | sort(attribute='mtime', reverse=true) | slice(docker_backup_config_retention) }}"
+  when: docker_backup_enabled and backup_docker_config_backups.matched > docker_backup_config_retention
+
+  tags:
+    - phase7
+- name: Find all Docker database backups
+  become: true
+  ansible.builtin.find:
+    paths: "{{ docker_backup_base }}/db"
+    patterns: "docker_db_*.tar.gz"
+    file_type: file
+  register: backup_docker_db_backups
+  when: docker_backup_enabled
+
+  tags:
+    - phase7
+- name: Clean up old Docker database backups
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ backup_docker_db_backups.files | sort(attribute='mtime', reverse=true) | slice(docker_backup_db_retention) }}"
+  when: docker_backup_enabled and backup_docker_db_backups.matched > docker_backup_db_retention
+
+  tags:
+    - phase7
+- name: Find all Docker full backups
+  ansible.builtin.find:
+    paths: "{{ docker_backup_base }}/full"
+    patterns: "docker_full_*.tar.gz"
+    file_type: file
+  register: backup_docker_full_backups
+  when: docker_backup_enabled
+
+  tags:
+    - phase7
+- name: Clean up old Docker full backups
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ backup_docker_full_backups.files | sort(attribute='mtime', reverse=true) | slice(docker_backup_full_retention) }}"
+  when: docker_backup_enabled and backup_docker_full_backups.matched > docker_backup_full_retention
+
+  tags:
+    - phase7
+- name: Check if rclone is available
+  ansible.builtin.command:
+    argv:
+      - rclone
+      - version
+  register: backup_rclone_check
+  changed_when: false
+  failed_when: false
+  when: docker_backup_enabled and docker_cloud_sync_enabled
+
+  tags:
+    - phase7
+- name: Sync Docker config backups to cloud
+  ansible.builtin.shell: |
+    for remote in "gdrive" "onedrive"; do
+      if [ "$remote" = "gdrive" ]; then
+        rclone sync "{{ docker_backup_base }}/seeds" "$remote:backup/docker/seeds/" --drive-use-trash=false -q
+      else
+        rclone sync "{{ docker_backup_base }}/seeds" "$remote:backup/docker/seeds/" -q
+      fi
+      rclone cleanup "$remote:" -q
+    done
+  changed_when: true
+  when: docker_backup_enabled and docker_cloud_sync_enabled and backup_rclone_check.rc == 0
+
+  tags:
+    - phase7
+- name: Sync Docker database backups to cloud
+  become: true
+  ansible.builtin.shell: |
+    for remote in "gdrive" "onedrive"; do
+      if [ "$remote" = "gdrive" ]; then
+        rclone sync "{{ docker_backup_base }}/db" "$remote:backup/docker/db/" --drive-use-trash=false -q
+      else
+        rclone sync "{{ docker_backup_base }}/db" "$remote:backup/docker/db/" -q
+      fi
+      rclone cleanup "$remote:" -q
+    done
+  changed_when: true
+  when: docker_backup_enabled and docker_cloud_sync_enabled and backup_rclone_check.rc == 0
+
+  tags:
+    - phase7
+- name: Sync Docker full backups to cloud
+  ansible.builtin.shell: |
+    for remote in "gdrive" "onedrive"; do
+      if [ "$remote" = "gdrive" ]; then
+        rclone sync "{{ docker_backup_base }}/full" "$remote:backup/docker/full/" --drive-use-trash=false -q
+      else
+        rclone sync "{{ docker_backup_base }}/full" "$remote:backup/docker/full/" -q
+      fi
+      rclone cleanup "$remote:" -q
+    done
+  changed_when: true
+  when: docker_backup_enabled and docker_cloud_sync_enabled and backup_rclone_check.rc == 0 and ansible_date_time.day == "01"
+  tags:
+    - phase7

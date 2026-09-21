@@ -1,0 +1,29 @@
+---
+- name: Stop and disable GitHub Actions watchdog timer
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ github_actions_watchdog_service_name }}.timer"
+    enabled: false
+    state: stopped
+  failed_when: false
+  tags: [rollback, operations_loop, github_actions_watchdog, phase7]
+
+- name: Remove GitHub Actions watchdog managed files
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "/etc/systemd/system/{{ github_actions_watchdog_service_name }}.timer"
+    - "/etc/systemd/system/{{ github_actions_watchdog_service_name }}.service"
+    - "{{ github_actions_watchdog_environment_file }}"
+    - "{{ github_actions_watchdog_targets_file }}"
+    - "{{ github_actions_watchdog_script_path }}"
+  no_log: true
+  tags: [rollback, operations_loop, github_actions_watchdog, phase7]
+
+- name: Reload systemd after GitHub Actions watchdog rollback
+  become: true
+  ansible.builtin.systemd:
+    daemon_reload: true
+  tags: [rollback, operations_loop, github_actions_watchdog, phase7]

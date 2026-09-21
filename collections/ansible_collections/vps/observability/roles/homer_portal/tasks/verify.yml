@@ -1,0 +1,27 @@
+---
+- name: 验证 Cloudflare Pages 首页可访问性
+  ansible.builtin.uri:
+    url: "https://{{ homer_portal_project_name }}.pages.dev"
+    method: GET
+    status_code: [200]
+  register: homer_portal_page_check
+  delegate_to: localhost
+  run_once: true
+  tags: [verify, observability, homer_portal, phase6]
+
+- name: 验证 Homer 配置文件可读
+  ansible.builtin.uri:
+    url: "https://{{ homer_portal_project_name }}.pages.dev/assets/config.yml"
+    method: GET
+    status_code: [200]
+  register: homer_portal_config_check
+  delegate_to: localhost
+  run_once: true
+  tags: [verify, observability, homer_portal, phase6]
+
+- name: 报告 Homer 门户验证结果
+  ansible.builtin.debug:
+    msg: "Homer portal is alive and healthy: https://{{ homer_portal_project_name }}.pages.dev (HTTP {{ homer_portal_page_check.status }})"
+  delegate_to: localhost
+  run_once: true
+  tags: [verify, observability, homer_portal, phase6]

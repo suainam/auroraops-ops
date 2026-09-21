@@ -1,0 +1,15 @@
+#!/sbin/openrc-run
+description="Cloudflare Server Monitor Probe Agent"
+
+name="cf-probe"
+command="{{ cf_probe_install_dir }}/cf-probe"
+command_args="run -debug={{ cf_probe_debug }}"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/${RC_SVCNAME}.log"
+error_log="/var/log/${RC_SVCNAME}.err"
+
+depend() {
+    need net
+    after firewall
+}

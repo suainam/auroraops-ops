@@ -1,0 +1,20 @@
+---
+- name: Reload systemd
+  become: true
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart health_check_runner timer
+  listen: restart health_check_runner timer
+  become: true
+  ansible.builtin.systemd:
+    name: health_check_runner.timer
+    state: restarted
+    enabled: true
+
+- name: Restart queue_processor timer
+  become: true
+  ansible.builtin.systemd:
+    name: queue_processor.timer
+    state: restarted
+    enabled: true

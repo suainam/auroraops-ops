@@ -1,0 +1,29 @@
+---
+# =============================================================================
+# Rollback GitHub Deploy Key Configuration
+# =============================================================================
+
+- name: Remove GitHub SSH config block
+  ansible.builtin.blockinfile:
+    path: "{{ gh_key_ssh_config_path }}"
+    marker: "# {mark} ANSIBLE MANAGED - GitHub Deploy Key"
+    state: absent
+  tags: [rollback, ci_cd, gh_key, gh_key_rollback, phase9]
+
+- name: Remove SSH key files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ gh_key_path }}"
+    - "{{ gh_key_public_key_path }}"
+  tags: [rollback, ci_cd, gh_key, gh_key_rollback, phase9]
+
+- name: Display rollback status
+  ansible.builtin.debug:
+    msg:
+      - "Rollback completed:"
+      - "- SSH config block removed"
+      - "- SSH key files removed"
+      - "Note: Deploy key on GitHub must be removed manually"
+  tags: [rollback, ci_cd, gh_key, gh_key_rollback, phase9]

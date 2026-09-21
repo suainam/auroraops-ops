@@ -1,0 +1,28 @@
+---
+- name: Report disabled Vaultwarden standby role
+  ansible.builtin.debug:
+    msg: "Role vaultwarden_standby is disabled, skipping"
+  when: not (auroraops_roles['operations_loop']['vaultwarden_standby'] | default(false) | bool)
+  tags: [deploy, operations_loop, vaultwarden_standby, phase7]
+
+- name: Validate Vaultwarden standby mode
+  ansible.builtin.assert:
+    that:
+      - vaultwarden_standby_mode in ['source', 'standby']
+    fail_msg: "vaultwarden_standby_mode must be source or standby"
+  when: auroraops_roles['operations_loop']['vaultwarden_standby'] | default(false) | bool
+  tags: [deploy, operations_loop, vaultwarden_standby, phase7]
+
+- name: Apply Vaultwarden standby source mode
+  ansible.builtin.import_tasks: apply_source.yml
+  when:
+    - auroraops_roles['operations_loop']['vaultwarden_standby'] | default(false) | bool
+    - vaultwarden_standby_mode == 'source'
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_source, phase7]
+
+- name: Apply Vaultwarden standby receiver mode
+  ansible.builtin.import_tasks: apply_standby.yml
+  when:
+    - auroraops_roles['operations_loop']['vaultwarden_standby'] | default(false) | bool
+    - vaultwarden_standby_mode == 'standby'
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]

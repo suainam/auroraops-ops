@@ -1,0 +1,11 @@
+---
+- name: Report disabled Vaultwarden snapshot role
+  ansible.builtin.debug:
+    msg: "Role vaultwarden_snapshot is disabled, skipping"
+  when: not (auroraops_roles['operations_loop']['vaultwarden_snapshot'] | default(false) | bool)
+  tags: [deploy, operations_loop, vaultwarden_snapshot, phase7]
+
+- name: Apply Vaultwarden snapshot lifecycle
+  ansible.builtin.import_tasks: apply.yml
+  when: auroraops_roles['operations_loop']['vaultwarden_snapshot'] | default(false) | bool
+  tags: [deploy, operations_loop, vaultwarden_snapshot, phase7]

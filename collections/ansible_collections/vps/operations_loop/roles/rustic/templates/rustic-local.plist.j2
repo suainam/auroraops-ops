@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.auroraops.rustic-local</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{ rustic_darwin_support_dir }}/config/rustic_backup.py</string>
+        <string>local</string>
+    </array>
+{% if rustic_darwin_local_backup_interval is defined and rustic_darwin_local_backup_interval %}
+    <key>StartInterval</key>
+    <integer>{{ rustic_darwin_local_backup_interval }}</integer>
+{% else %}
+    <key>StartCalendarInterval</key>
+    <array>
+    {% for minute in rustic_darwin_local_backup_minutes | default([0, 20, 40]) %}
+      <dict>
+        <key>Minute</key>
+        <integer>{{ minute }}</integer>
+      </dict>
+    {% endfor %}
+    </array>
+{% endif %}
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>RUSTIC_USE_PROFILE</key>
+        <string>{{ rustic_darwin_config_dir }}/rustic.toml</string>
+        <key>RUSTIC_ENV_FILE</key>
+        <string>{{ rustic_darwin_config_dir }}/backup.env</string>
+        <key>RUSTIC_BIN_PATH</key>
+        <string>{{ rustic_darwin_bin_path | default(rustic_bin_path) }}</string>
+        <key>RCLONE_CONFIG</key>
+        <string>{{ rustic_darwin_rclone_config_path | default(rustic_rclone_config_path) }}</string>
+        <key>PATH</key>
+        <string>{{ ansible_env.PATH }}:/opt/homebrew/bin:/usr/local/bin</string>
+        <key>HOME</key>
+        <string>{{ ansible_env.HOME }}</string>
+        <key>RUSTIC_LOG_FILE</key>
+        <string>{{ rustic_darwin_log_dir }}/rustic_backup.log</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>{{ rustic_darwin_support_dir }}/logs/rustic-local.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{ rustic_darwin_support_dir }}/logs/rustic-local.log</string>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>WorkingDirectory</key>
+    <string>{{ rustic_darwin_support_dir }}/config</string>
+</dict>
+</plist>

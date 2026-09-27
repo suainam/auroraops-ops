@@ -14,7 +14,7 @@ rustic_lock_timeout: 180
 rustic_log_dir: "/var/log/rustic"
 rustic_temp_dir: "/var/lib/rustic/.init_markers"
 rustic_cleanup_success_marker: "/var/lib/rustic/cleanup-success.json"
-rustic_rclone_config_path: "/root/.config/rclone/rclone.conf"
+rustic_rclone_config_path: "{{ (ansible_env.HOME ~ '/.config/rclone/rclone.conf') if ((ansible_system | default('Linux')) == 'Darwin') else '/root/.config/rclone/rclone.conf' }}"
 
 # Optional role-local Logrotate configuration
 rustic_logrotate_enabled: true
@@ -35,6 +35,7 @@ rustic_backup_source_docker_dir: "{{ backup_source_docker_dir | default('/opt/do
 rustic_backup_cloud_remotes: "{{ backup_cloud_remotes | default(['onedrive', 'gdrive']) }}"
 rustic_backup_cloud_prefix: "{{ backup_cloud_prefix | default('backup') }}"
 rustic_backup_exclude_file: "/etc/rustic/exclude.txt"
+rustic_cloud_backup_enabled: true
 
 rustic_backup_src_paths: "{{ backup_src_paths | default([]) }}"
 rustic_backup_src_paths_extra: "{{ backup_src_paths_extra | default([]) }}"
@@ -80,3 +81,26 @@ rustic_observe_baseline_mode: false
 
 # Restore 操作类型
 rustic_restore_action: "" # list_snapshots, restore
+
+# Darwin-specific paths and configuration
+rustic_darwin_support_dir: "{{ ansible_env.HOME }}/Library/Application Support/AuroraOps/rustic"
+rustic_darwin_launchagents_dir: "{{ ansible_env.HOME }}/Library/LaunchAgents"
+rustic_darwin_script_path: "{{ rustic_darwin_support_dir }}/config/rustic_backup.py"
+rustic_darwin_local_repo: "{{ rustic_darwin_support_dir }}/repo"
+rustic_darwin_config_dir: "{{ rustic_darwin_support_dir }}/config"
+rustic_darwin_log_dir: "{{ rustic_darwin_support_dir }}/logs"
+rustic_darwin_run_dir: "{{ rustic_darwin_support_dir }}/run"
+rustic_darwin_tmp_dir: "{{ rustic_darwin_support_dir }}/tmp"
+rustic_bin_path: "rustic"
+rustic_darwin_bin_path: "{{ '/opt/homebrew/bin/rustic' if (ansible_architecture | default('arm64')) == 'arm64' else '/usr/local/bin/rustic' }}"
+rustic_darwin_rclone_bin_path: "{{ '/opt/homebrew/bin/rclone' if (ansible_architecture | default('arm64')) == 'arm64' else '/usr/local/bin/rclone' }}"
+rustic_darwin_rclone_config_path: "{{ ansible_env.HOME }}/.config/rclone/rclone.conf"
+rustic_darwin_launchd_local_label: "com.auroraops.rustic-local"
+rustic_darwin_launchd_cloud_label: "com.auroraops.rustic-cloud"
+rustic_local_backup_timer_minute: "*/20"
+rustic_cloud_backup_timer_minute: "17"
+rustic_darwin_local_backup_minutes:
+  - 0
+  - 20
+  - 40
+rustic_darwin_rollback_remove_support: false

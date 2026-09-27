@@ -1,0 +1,42 @@
+---
+- name: Roll back Rustic on Darwin (launchd) without deleting backup data
+  tags: [rollback, operations_loop, rustic, rustic_rollback, phase7]
+  block:
+    - name: Unload and disable local Rustic LaunchAgent
+      community.general.launchd:
+        name: "{{ rustic_darwin_launchagents_dir }}/com.auroraops.rustic-local.plist"
+        enabled: false
+        state: stopped
+      when: not ansible_check_mode
+      tags: [rollback, operations_loop, rustic, rustic_rollback, phase7]
+
+    - name: Unload and disable cloud Rustic LaunchAgent
+      community.general.launchd:
+        name: "{{ rustic_darwin_launchagents_dir }}/com.auroraops.rustic-cloud.plist"
+        enabled: false
+        state: stopped
+      when: not ansible_check_mode
+      tags: [rollback, operations_loop, rustic, rustic_rollback, phase7]
+
+    - name: Remove Rustic LaunchAgent plist files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ rustic_darwin_launchagents_dir }}/com.auroraops.rustic-local.plist"
+        - "{{ rustic_darwin_launchagents_dir }}/com.auroraops.rustic-cloud.plist"
+      tags: [rollback, operations_loop, rustic, rustic_rollback, phase7]
+
+    - name: Remove Rustic Application Support directories (optional, preserve data by default)
+      ansible.builtin.file:
+        path: "{{ rustic_darwin_support_dir }}"
+        state: absent
+      when: rustic_darwin_rollback_remove_support | bool
+      tags: [rollback, operations_loop, rustic, rustic_rollback, phase7]
+
+    - name: Report data-preserving Rustic rollback on Darwin
+      ansible.builtin.debug:
+        msg: >-
+          Darwin Rustic rollback complete. Unloaded launchd agents and removed plists.
+          Support directory preserved (unless explicitly removed): {{ rustic_darwin_support_dir }}
+      tags: [rollback, operations_loop, rustic, rustic_rollback, phase7]

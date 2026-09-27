@@ -23,22 +23,36 @@
   when: auroraops_roles['operations_loop']['rustic'] | default(true) | bool
   tags: [deploy, operations_loop, rustic, rustic_preflight, phase7]
 
+- name: Include Darwin deployment tasks
+  ansible.builtin.include_tasks:
+    file: apply_darwin.yml
+  when:
+    - auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+    - ansible_system == 'Darwin'
+  tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
 - name: 包含安装任务
   ansible.builtin.include_tasks:
     file: install.yml
-  when: auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+  when:
+    - auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+    - ansible_system != 'Darwin'
   tags: [deploy, operations_loop, rustic, rustic_install, phase7]
 
 - name: 包含初始化任务
   ansible.builtin.include_tasks:
     file: init.yml
-  when: auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+  when:
+    - auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+    - ansible_system != 'Darwin'
   tags: [deploy, operations_loop, rustic, rustic_init, phase7]
 
 - name: 包含部署任务
   ansible.builtin.include_tasks:
     file: deploy.yml
-  when: auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+  when:
+    - auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+    - ansible_system != 'Darwin'
   tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
 
 - name: Configure Rustic logrotate independently
@@ -48,7 +62,9 @@
     optional_logrotate_enabled: "{{ rustic_logrotate_enabled }}"
     optional_logrotate_config_path: "{{ rustic_logrotate_config_path }}"
     optional_logrotate_config: "{{ rustic_logrotate_config }}"
-  when: auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+  when:
+    - auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+    - ansible_system != 'Darwin'
   tags: [deploy, operations_loop, rustic, rustic_logrotate, phase7]
 
 - name: 包含清理任务
@@ -57,13 +73,17 @@
   when:
     - auroraops_roles['operations_loop']['rustic'] | default(true) | bool
     - rustic_manage_units | bool
+    - ansible_system != 'Darwin'
   tags: [deploy, operations_loop, rustic, rustic_cleanup, phase7]
 
 - name: Finalize Rustic migration after all split units are active
   ansible.builtin.include_tasks:
     file: finalize.yml
-  when: auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+  when:
+    - auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+    - ansible_system != 'Darwin'
   tags: [deploy, operations_loop, rustic, rustic_finalize, phase7]
+
 
 - name: 包含恢复任务
   ansible.builtin.include_tasks:

@@ -7,5 +7,7 @@
 
 - name: Apply Vaultwarden snapshot lifecycle
   ansible.builtin.import_tasks: apply.yml
-  when: auroraops_roles['operations_loop']['vaultwarden_snapshot'] | default(false) | bool
+  when:
+    - auroraops_roles['operations_loop']['vaultwarden_snapshot'] | default(false) | bool
+    - (ansible_system == 'Darwin') or (ansible_system != 'Darwin')
   tags: [deploy, operations_loop, vaultwarden_snapshot, phase7]

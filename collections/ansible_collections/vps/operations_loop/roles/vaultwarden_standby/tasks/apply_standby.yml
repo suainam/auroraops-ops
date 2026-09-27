@@ -193,7 +193,12 @@
     app_service_working_directory: "{{ vaultwarden_standby_root }}"
     app_service_environment:
       VAULTWARDEN_STANDBY_ROOT: "{{ vaultwarden_standby_root }}"
-      VAULTWARDEN_STANDBY_SOURCE: "{{ vaultwarden_standby_source_user }}@{{ vaultwarden_standby_source_host }}::{{ vaultwarden_standby_source_module }}/"
+      VAULTWARDEN_STANDBY_SOURCE: >-
+        {{
+          (vaultwarden_standby_source_user ~ '@' ~ vaultwarden_standby_source_host ~ ':' ~ vaultwarden_standby_source_snapshot_path)
+          if (vaultwarden_standby_source_snapshot_path is defined and vaultwarden_standby_source_snapshot_path | length > 0)
+          else (vaultwarden_standby_source_user ~ '@' ~ vaultwarden_standby_source_host ~ '::' ~ vaultwarden_standby_source_module ~ '/')
+        }}
       VAULTWARDEN_STANDBY_SOURCE_PORT: "{{ vaultwarden_standby_source_port }}"
       VAULTWARDEN_STANDBY_SSH_KEY: "{{ vaultwarden_standby_ssh_key }}"
       VAULTWARDEN_STANDBY_KNOWN_HOSTS: "{{ vaultwarden_standby_known_hosts }}"
@@ -226,12 +231,13 @@
   vars:
     app_timer_name: "{{ vaultwarden_standby_service_name }}"
     app_timer_description: "Vaultwarden passive snapshot synchronization every 5 minutes"
+    app_timer_exec_start: "{{ python_executor }} {{ vaultwarden_standby_script_path }} sync"
     app_timer_on_calendar: "{{ vaultwarden_standby_timer_calendar }}"
     app_timer_persistent: true
     app_timer_randomized_delay: "0"
+    app_timer_environment: "{{ app_service_environment }}"
     app_timer_enabled: "{{ vaultwarden_standby_timer_enabled | bool }}"
     app_timer_state: "{{ 'started' if vaultwarden_standby_timer_enabled | bool else 'stopped' }}"
-  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
 
 - name: Stop and disable stale Vaultwarden DR health timer in snapshot-only mode
   become: true

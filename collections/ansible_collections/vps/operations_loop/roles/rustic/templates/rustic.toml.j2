@@ -3,6 +3,10 @@
 # 注意: retention 策略由 rustic_backup.py 通过 CLI 参数控制，不在此处配置
 
 [repository]
-repository = "{{ backup_base_dir }}/complete"
+{% if ansible_system == 'Darwin' %}
+repository = "{{ rustic_darwin_local_repo }}"
+password-file = "{{ rustic_darwin_config_dir }}/password.txt"
+{% else %}
+repository = "{{ rustic_backup_base_dir }}/complete"
 password-file = "{{ rustic_password_file | default('/etc/rustic/password.txt') }}"
-
+{% endif %}

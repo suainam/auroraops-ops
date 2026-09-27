@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.auroraops.rustic-cloud</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{ rustic_darwin_support_dir }}/config/rustic_backup.py</string>
+        <string>cloud</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <array>
+    {% for hour in rustic_cloud_backup_hours | default([0, 6, 12, 18]) %}
+      <dict>
+        <key>Hour</key>
+        <integer>{{ hour }}</integer>
+        <key>Minute</key>
+        <integer>{{ rustic_cloud_backup_timer_minute | default(17) }}</integer>
+      </dict>
+    {% endfor %}
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>RUSTIC_USE_PROFILE</key>
+        <string>{{ rustic_darwin_config_dir }}/rustic.toml</string>
+        <key>RUSTIC_ENV_FILE</key>
+        <string>{{ rustic_darwin_config_dir }}/backup.env</string>
+        <key>RUSTIC_BIN_PATH</key>
+        <string>{{ rustic_darwin_bin_path | default(rustic_bin_path) }}</string>
+        <key>RCLONE_CONFIG</key>
+        <string>{{ rustic_darwin_rclone_config_path | default(rustic_rclone_config_path) }}</string>
+        <key>PATH</key>
+        <string>{{ ansible_env.PATH }}:/opt/homebrew/bin:/usr/local/bin</string>
+        <key>HOME</key>
+        <string>{{ ansible_env.HOME }}</string>
+        <key>RUSTIC_LOG_FILE</key>
+        <string>{{ rustic_darwin_log_dir }}/rustic_backup.log</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>{{ rustic_darwin_support_dir }}/logs/rustic-cloud.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{ rustic_darwin_support_dir }}/logs/rustic-cloud.log</string>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>WorkingDirectory</key>
+    <string>{{ rustic_darwin_support_dir }}/config</string>
+</dict>
+</plist>

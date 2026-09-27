@@ -3,6 +3,14 @@
   ansible.builtin.import_tasks: preflight.yml
   tags: [verify, operations_loop, rustic, rustic_preflight, phase7]
 
+- name: Include Darwin verification tasks
+  ansible.builtin.include_tasks:
+    file: verify_darwin.yml
+  when:
+    - auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+    - ansible_system == 'Darwin'
+  tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
 - name: 验证 Rustic 备份配置
   tags: [verify, operations_loop, rustic, rustic_verify, phase7]
   block:
@@ -163,6 +171,7 @@
           Split timers: {{ rustic_split_timer_query.results | map(attribute='status.ActiveState') | list }}
           Check timer: {{ rustic_verify_service_facts.ansible_facts.services.get('rustic-check.timer', {}).get('state', 'N/A') }}
       tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+  when: ansible_system != 'Darwin'
 
 - name: Verify Rustic logrotate configuration
   ansible.builtin.import_tasks: ../../../common/tasks/verify_optional_logrotate.yml
@@ -170,4 +179,5 @@
     optional_logrotate_owner: Rustic
     optional_logrotate_enabled: "{{ rustic_logrotate_enabled }}"
     optional_logrotate_config_path: "{{ rustic_logrotate_config_path }}"
+  when: ansible_system != 'Darwin'
   tags: [verify, operations_loop, rustic, rustic_verify_logrotate, phase7]

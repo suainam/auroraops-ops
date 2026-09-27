@@ -23,31 +23,54 @@ import fcntl
 import time
 from datetime import datetime
 
+def _load_environment_file():
+    """Load a private KEY=value file before constants are initialized."""
+    path = os.getenv("RUSTIC_ENV_FILE")
+    if not path or not os.path.isfile(path):
+        return
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"\\\''))
+
+
+_load_environment_file()
+
+def _resolve_path(raw_path):
+    """Safely expand user and environment variables for filesystem paths."""
+    if not raw_path:
+        return raw_path
+    return os.path.abspath(os.path.expanduser(os.path.expandvars(raw_path)))
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
         logging.FileHandler(
-            os.getenv("RUSTIC_LOG_FILE", "/var/log/rustic/rustic_backup.log")
+            _resolve_path(os.getenv("RUSTIC_LOG_FILE", "/var/log/rustic/rustic_backup.log"))
         ),
         logging.StreamHandler(),
     ],
 )
 logger = logging.getLogger(__name__)
-
-HOME_DIR = os.getenv("HOME", "/root")
-SOURCE_DIR = os.getenv("BACKUP_SOURCE_DOCKER_DIR", "/opt/dockers")
+HOME_DIR = _resolve_path(os.getenv("HOME", "/root"))
+SOURCE_DIR = _resolve_path(os.getenv("BACKUP_SOURCE_DOCKER_DIR", "/opt/dockers"))
 CLOUD_REMOTES = os.getenv("BACKUP_CLOUD_REMOTES", "onedrive,gdrive").split(",")
 CLOUD_PREFIX = os.getenv("BACKUP_CLOUD_PREFIX", "backup")
-LOCAL_PREFIX = os.getenv("BACKUP_LOCAL_PREFIX", "/opt/backups/complete")
+LOCAL_PREFIX = _resolve_path(os.getenv("BACKUP_LOCAL_PREFIX", "/opt/backups/complete"))
 RUSTIC_PASSWORD = os.getenv("RUSTIC_PASSWORD")
-EXCLUDE_FILE = os.getenv("BACKUP_EXCLUDE_FILE", "/etc/rustic/exclude.txt")
-LOCK_FILE = os.getenv("RUSTIC_LOCK_FILE", "/run/lock/rustic-backup.lock")
+RUSTIC_BIN_PATH = os.path.expanduser(os.path.expandvars(os.getenv("RUSTIC_BIN_PATH", "rustic")))
+EXCLUDE_FILE = _resolve_path(os.getenv("BACKUP_EXCLUDE_FILE", "/etc/rustic/exclude.txt"))
+LOCK_FILE = _resolve_path(os.getenv("RUSTIC_LOCK_FILE", "/run/lock/rustic-backup.lock"))
 FORGET_TIMEOUT_SECONDS = int(os.getenv("RUSTIC_FORGET_TIMEOUT_SECONDS", "900"))
-CLEANUP_SUCCESS_MARKER = os.getenv(
-    "RUSTIC_CLEANUP_SUCCESS_MARKER", "/var/lib/rustic/cleanup-success.json"
+CLEANUP_SUCCESS_MARKER = _resolve_path(
+    os.getenv("RUSTIC_CLEANUP_SUCCESS_MARKER", "/var/lib/rustic/cleanup-success.json")
 )
-RESTORE_PROBE_DIR = os.getenv("RUSTIC_RESTORE_PROBE_DIR", "/var/tmp")
+RESTORE_PROBE_DIR = _resolve_path(os.getenv("RUSTIC_RESTORE_PROBE_DIR", "/var/tmp"))
 RESTORE_PROBE_PATH = os.getenv("RUSTIC_RESTORE_PROBE_PATH", "/etc/ssh/sshd_config")
 
 RETENTION = {
@@ -59,7 +82,7 @@ RETENTION = {
 }
 
 SYSTEM_PATHS = [
-    p.strip() for p in os.getenv("BACKUP_SRC_PATHS", "").split(",") if p.strip()
+    _resolve_path(p.strip()) for p in os.getenv("BACKUP_SRC_PATHS", "").split(",") if p.strip()
 ]
 PG_PASSWORD = os.getenv("POSTGRESQL_DB_ADMIN_PASSWORD", "")
 REDIS_PASSWORD = os.getenv("REDIS_DB_ADMIN_PASSWORD", "")
@@ -71,6 +94,14 @@ def get_env():
     env["HOME"] = HOME_DIR
     env["XDG_CACHE_HOME"] = f"{HOME_DIR}/.cache"
     env["RUSTIC_PASSWORD"] = RUSTIC_PASSWORD
+
+    current_path = env.get("PATH", "")
+    standard_dirs = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+    path_parts = [p for p in current_path.split(os.pathsep) if p]
+    for d in standard_dirs:
+        if d not in path_parts:
+            path_parts.append(d)
+    env["PATH"] = os.pathsep.join(path_parts)
     return env
 
 
@@ -135,6 +166,12 @@ def export_databases():
 
     return exported
 
+def export_databases_if_enabled():
+    """Run the existing database exporter only when configured for this host."""
+    if os.getenv("RUSTIC_EXPORT_DATABASES", "true").lower() in {"0", "false", "no"}:
+        return []
+    return export_databases()
+
 
 def get_backup_tag():
     """根据时间确定备份标签"""
@@ -159,7 +196,7 @@ def backup_to_repo(repo, paths, exclude_file, result_container, idx):
     logger.info(f"Backup: Using tag '{backup_tag}' for this backup")
 
     cmd = [
-        "rustic",
+        RUSTIC_BIN_PATH,
         "backup",
         "--repo",
         repo,
@@ -212,7 +249,7 @@ def backup_to_repo(repo, paths, exclude_file, result_container, idx):
 
 def get_snapshot_count(repo):
     """获取仓库当前 snapshot 数量，用于 cleanup evidence。"""
-    cmd = ["rustic", "snapshots", "--repo", repo, "--json"]
+    cmd = [RUSTIC_BIN_PATH, "snapshots", "--repo", repo, "--json"]
     stdout, _, code = run_command(cmd, timeout=120, check=False)
     if code != 0 or not stdout.strip():
         return None
@@ -243,7 +280,7 @@ def prune_repo(repo):
     for tag, keep_last in tag_retention.items():
         logger.info(f"Prune: Forgetting tag '{tag}' (keep-last {keep_last}) for {repo}")
         cmd = [
-            "rustic",
+            RUSTIC_BIN_PATH,
             "forget",
             "--repo",
             repo,
@@ -262,7 +299,7 @@ def prune_repo(repo):
     # 最后统一执行 prune 回收空间
     logger.info(f"Prune: Pruning unused data for {repo}")
     cmd = [
-        "rustic",
+        RUSTIC_BIN_PATH,
         "prune",
         "--repo",
         repo,
@@ -301,7 +338,7 @@ def backup_all(mode="all"):
     logger.info("Backup: Starting optimized complete system backup")
     logger.info("=" * 60)
 
-    exported = export_databases()
+    exported = export_databases_if_enabled()
 
     all_paths = []
     if os.path.exists(SOURCE_DIR):
@@ -372,7 +409,7 @@ def backup_all(mode="all"):
 def check_repo(repo):
     """检查仓库完整性"""
     logger.info(f"Check: Verifying repository {repo}...")
-    cmd = ["rustic", "check", "--repo", repo, "--read-data", "--read-data-subset", "1%"]
+    cmd = [RUSTIC_BIN_PATH, "check", "--repo", repo, "--read-data", "--read-data-subset", "1%"]
     _, stderr, code = run_command(cmd, timeout=300, check=False)
     if code == 0:
         logger.info(f"Check: {repo} is healthy")
@@ -461,7 +498,7 @@ def repository_targets():
 def inspect_repo(repo):
     """Read repository identity and latest snapshot evidence."""
     config_stdout, config_stderr, config_code = run_command(
-        ["rustic", "cat", "config", "--repo", repo],
+        [RUSTIC_BIN_PATH, "cat", "config", "--repo", repo],
         timeout=60,
         check=False,
     )
@@ -470,7 +507,7 @@ def inspect_repo(repo):
         return None
 
     snapshots_stdout, snapshots_stderr, snapshots_code = run_command(
-        ["rustic", "snapshots", "--repo", repo, "--json"],
+        [RUSTIC_BIN_PATH, "snapshots", "--repo", repo, "--json"],
         timeout=120,
         check=False,
     )
@@ -531,7 +568,7 @@ def restore_probe():
     ) as target:
         _, stderr, code = run_command(
             [
-                "rustic",
+                RUSTIC_BIN_PATH,
                 "restore",
                 "--repo",
                 LOCAL_PREFIX,
@@ -614,7 +651,7 @@ def init_all():
     repos.append(LOCAL_PREFIX)
     for repo in repos:
         logger.info(f"Init: Checking repository {repo}")
-        cmd = ["rustic", "init", "--repo", repo]
+        cmd = [RUSTIC_BIN_PATH, "init", "--repo", repo]
         _, stderr, code = run_command(cmd, timeout=60, check=False)
         if code == 0:
             logger.info(f"Init: Repository {repo} initialized")

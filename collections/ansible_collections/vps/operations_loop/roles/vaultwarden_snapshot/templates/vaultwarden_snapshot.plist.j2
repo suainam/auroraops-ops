@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{{ vaultwarden_snapshot_launchd_label }}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{ ansible_python_interpreter | default(ansible_playbook_python) | default('/usr/bin/python3') }}</string>
+        <string>{{ vaultwarden_snapshot_script_path }}</string>
+        <string>create</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{{ ansible_env.PATH | default('/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin') }}</string>
+        <key>VAULTWARDEN_SNAPSHOT_SOURCE_DIR</key>
+        <string>{{ vaultwarden_snapshot_source_dir }}</string>
+        <key>VAULTWARDEN_SNAPSHOT_ROOT</key>
+        <string>{{ vaultwarden_snapshot_root }}</string>
+        <key>VAULTWARDEN_SNAPSHOT_CONTAINER</key>
+        <string>{{ vaultwarden_snapshot_container }}</string>
+        <key>VAULTWARDEN_SNAPSHOT_HEALTH_URL</key>
+        <string>{{ vaultwarden_snapshot_health_url }}</string>
+        <key>VAULTWARDEN_SNAPSHOT_RETENTION</key>
+        <string>{{ vaultwarden_snapshot_retention | string }}</string>
+        <key>VAULTWARDEN_SNAPSHOT_HOSTNAME</key>
+        <string>{{ inventory_hostname }}</string>
+        <key>VAULTWARDEN_SNAPSHOT_NOTIFY_FAILURE</key>
+        <string>{{ vaultwarden_snapshot_notify_failure | bool | ternary('true', 'false') }}</string>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>{{ vaultwarden_snapshot_root }}</string>
+    <key>StartInterval</key>
+    <integer>{{ vaultwarden_snapshot_launchd_interval_seconds }}</integer>
+    <key>StandardOutPath</key>
+    <string>{{ vaultwarden_snapshot_log_dir }}/vaultwarden_snapshot.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{ vaultwarden_snapshot_log_dir }}/vaultwarden_snapshot.stderr.log</string>
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

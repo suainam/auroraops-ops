@@ -1,11 +1,5 @@
 ---
-- name: Include Darwin verification tasks
-  ansible.builtin.include_tasks:
-    file: verify_darwin.yml
-  when: ansible_system == 'Darwin'
-  tags: [verify, operations_loop, vaultwarden_snapshot, phase7]
-
-- name: Build Vaultwarden snapshot verification environment
+- name: Build Vaultwarden snapshot verification environment (Darwin)
   ansible.builtin.set_fact:
     vaultwarden_snapshot_verify_environment:
       VAULTWARDEN_SNAPSHOT_SOURCE_DIR: "{{ vaultwarden_snapshot_source_dir }}"
@@ -15,95 +9,82 @@
       VAULTWARDEN_SNAPSHOT_RETENTION: "{{ vaultwarden_snapshot_retention | string }}"
       VAULTWARDEN_SNAPSHOT_HOSTNAME: "{{ inventory_hostname }}"
       VAULTWARDEN_SNAPSHOT_NOTIFY_FAILURE: "false"
-  when: ansible_system != 'Darwin'
   tags: [verify, operations_loop, vaultwarden_snapshot, phase7]
 
-- name: Check Vaultwarden snapshot managed files
-  become: true
+- name: Check Vaultwarden snapshot managed files (Darwin)
   ansible.builtin.stat:
     path: "{{ item }}"
   loop:
     - "{{ vaultwarden_snapshot_script_path }}"
-    - "/etc/systemd/system/{{ vaultwarden_snapshot_service_name }}.service"
-    - "/etc/systemd/system/{{ vaultwarden_snapshot_service_name }}.timer"
+    - "{{ vaultwarden_snapshot_launchd_plist_path }}"
     - "{{ vaultwarden_snapshot_root }}/latest.json"
   register: vaultwarden_snapshot_managed_files
-  when: ansible_system != 'Darwin'
   tags: [verify, operations_loop, vaultwarden_snapshot, phase7]
 
-- name: Assert Vaultwarden snapshot managed files exist
+- name: Assert Vaultwarden snapshot managed files exist (Darwin)
   ansible.builtin.assert:
     that:
       - item.stat.exists
     fail_msg: "Vaultwarden snapshot managed file is missing: {{ item.item }}"
   loop: "{{ vaultwarden_snapshot_managed_files.results }}"
-  when: ansible_system != 'Darwin'
   tags: [verify, operations_loop, vaultwarden_snapshot, phase7]
 
-- name: Verify Vaultwarden snapshot timer is active
-  become: true
+- name: Check Vaultwarden snapshot LaunchAgent status (Darwin)
   ansible.builtin.command:
-    argv: [systemctl, is-active, "{{ vaultwarden_snapshot_service_name }}.timer"]
+    argv: [launchctl, list]
+  register: vaultwarden_snapshot_launchctl_list
   changed_when: false
-  when: ansible_system != 'Darwin'
   tags: [verify, operations_loop, vaultwarden_snapshot, phase7]
 
-- name: Verify Vaultwarden snapshot timer is enabled
-  become: true
-  ansible.builtin.command:
-    argv: [systemctl, is-enabled, "{{ vaultwarden_snapshot_service_name }}.timer"]
-  changed_when: false
-  when: ansible_system != 'Darwin'
+- name: Assert Vaultwarden snapshot LaunchAgent is loaded (Darwin)
+  ansible.builtin.assert:
+    that:
+      - vaultwarden_snapshot_launchd_label in vaultwarden_snapshot_launchctl_list.stdout
+    fail_msg: "Vaultwarden snapshot LaunchAgent {{ vaultwarden_snapshot_launchd_label }} is not loaded in launchd"
   tags: [verify, operations_loop, vaultwarden_snapshot, phase7]
 
-- name: Verify latest Vaultwarden snapshot contents
-  become: true
+- name: Verify latest Vaultwarden snapshot contents (Darwin)
   ansible.builtin.command:
     argv:
-      - "{{ python_executor }}"
+      - "{{ ansible_python_interpreter | default(ansible_playbook_python) | default('/usr/bin/python3') }}"
       - "{{ vaultwarden_snapshot_script_path }}"
       - verify
       - latest
   environment: "{{ vaultwarden_snapshot_verify_environment }}"
   register: vaultwarden_snapshot_verify_result
   changed_when: false
-  when: ansible_system != 'Darwin'
   tags: [verify, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_verify, phase7]
 
-- name: Verify latest Vaultwarden snapshot can be restored
-  become: true
+- name: Verify latest Vaultwarden snapshot can be restored (Darwin)
   ansible.builtin.command:
     argv:
-      - "{{ python_executor }}"
+      - "{{ ansible_python_interpreter | default(ansible_playbook_python) | default('/usr/bin/python3') }}"
       - "{{ vaultwarden_snapshot_script_path }}"
       - restore-test
       - latest
   environment: "{{ vaultwarden_snapshot_verify_environment }}"
   register: vaultwarden_snapshot_restore_test_result
   changed_when: false
-  when: ansible_system != 'Darwin'
   tags: [verify, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_restore_test, phase7]
 
-- name: Read current epoch for Vaultwarden snapshot age verification
+- name: Read current epoch for Vaultwarden snapshot age verification (Darwin)
   ansible.builtin.command:
     argv: [date, +%s]
   register: vaultwarden_snapshot_current_epoch
   changed_when: false
-  when: ansible_system != 'Darwin'
   tags: [verify, operations_loop, vaultwarden_snapshot, phase7]
 
-- name: Check Vaultwarden snapshot age
+- name: Check Vaultwarden snapshot age (Darwin)
   ansible.builtin.assert:
     that:
       - >-
         (vaultwarden_snapshot_current_epoch.stdout | int)
-        - (vaultwarden_snapshot_managed_files.results[3].stat.mtime | int)
+        - (vaultwarden_snapshot_managed_files.results[2].stat.mtime | int)
         <= (vaultwarden_snapshot_max_age_seconds | int)
     fail_msg: "Latest Vaultwarden snapshot is older than {{ vaultwarden_snapshot_max_age_seconds }} seconds"
-  when: ansible_system != 'Darwin'
   tags: [verify, operations_loop, vaultwarden_snapshot, phase7]
 
-- name: Verify Vaultwarden remains available
+- name: Verify Vaultwarden remains available (Darwin)
   ansible.builtin.uri:
     url: "{{ vaultwarden_snapshot_health_url }}"
     method: GET
@@ -113,11 +94,9 @@
   failed_when: >-
     vaultwarden_snapshot_alive_result.status != 200
     or vaultwarden_snapshot_alive_result.content | length == 0
-  when: ansible_system != 'Darwin'
   tags: [verify, operations_loop, vaultwarden_snapshot, phase7]
 
-- name: Check for incomplete Vaultwarden snapshot staging directories
-  become: true
+- name: Check for incomplete Vaultwarden snapshot staging directories (Darwin)
   ansible.builtin.find:
     paths: "{{ vaultwarden_snapshot_root }}"
     file_type: directory
@@ -125,15 +104,13 @@
     hidden: true
     recurse: false
   register: vaultwarden_snapshot_staging_dirs
-  when: ansible_system != 'Darwin'
   tags: [verify, operations_loop, vaultwarden_snapshot, phase7]
 
-- name: Assert Vaultwarden snapshot workspace is clean
+- name: Assert Vaultwarden snapshot workspace is clean (Darwin)
   ansible.builtin.assert:
     that:
       - vaultwarden_snapshot_staging_dirs.matched == 0
       - (vaultwarden_snapshot_verify_result.stdout | from_json).sqlite_quick_check == 'ok'
       - (vaultwarden_snapshot_restore_test_result.stdout | from_json).sqlite_quick_check == 'ok'
     fail_msg: "Vaultwarden snapshot workspace or validation result is not clean"
-  when: ansible_system != 'Darwin'
   tags: [verify, operations_loop, vaultwarden_snapshot, phase7]

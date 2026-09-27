@@ -166,6 +166,12 @@ def export_databases():
 
     return exported
 
+def export_databases_if_enabled():
+    """Run the existing database exporter only when configured for this host."""
+    if os.getenv("RUSTIC_EXPORT_DATABASES", "true").lower() in {"0", "false", "no"}:
+        return []
+    return export_databases()
+
 
 def get_backup_tag():
     """根据时间确定备份标签"""
@@ -332,7 +338,7 @@ def backup_all(mode="all"):
     logger.info("Backup: Starting optimized complete system backup")
     logger.info("=" * 60)
 
-    exported = export_databases()
+    exported = export_databases_if_enabled()
 
     all_paths = []
     if os.path.exists(SOURCE_DIR):

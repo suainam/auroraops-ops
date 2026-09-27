@@ -22,25 +22,26 @@
     - "{{ rustic_darwin_support_dir }}/config"
     - "{{ rustic_darwin_support_dir }}/logs"
     - "{{ rustic_darwin_support_dir }}/run"
-    - "{{ rustic_darwin_support_dir }}/repo"
-    - "{{ rustic_darwin_support_dir }}/tmp"
+    - "{{ rustic_darwin_local_repo }}"
+    - "{{ rustic_darwin_tmp_dir }}"
+    - "{{ rustic_darwin_launchagents_dir }}"
   tags: [deploy, operations_loop, rustic, rustic_init, phase7]
 
 - name: Deploy Rustic backup script to Application Support
   ansible.builtin.copy:
     src: rustic_backup.py
-    dest: "{{ rustic_darwin_support_dir }}/config/rustic_backup.py"
+    dest: "{{ rustic_darwin_script_path }}"
     mode: "0755"
   tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
 
 - name: Deploy Rustic configuration (rustic.toml)
   ansible.builtin.template:
     src: rustic.toml.j2
-    dest: "{{ rustic_darwin_support_dir }}/config/rustic.toml"
+    dest: "{{ rustic_darwin_config_dir }}/rustic.toml"
     mode: "0600"
   tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
 
-- name: Deploy exclude file
+- name: Deploy Rustic exclude file
   ansible.builtin.copy:
     content: |
       {% for pattern in backup_exclude_paths | default([]) %}
@@ -52,14 +53,22 @@
       !{{ pattern }}
       {% endif %}
       {% endfor %}
-    dest: "{{ rustic_darwin_support_dir }}/config/exclude.txt"
+    dest: "{{ rustic_darwin_config_dir }}/exclude.txt"
     mode: "0644"
+  tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+- name: Deploy Rustic password file (Darwin, private 0600)
+  ansible.builtin.copy:
+    content: "{{ vault_rustic_password }}"
+    dest: "{{ rustic_darwin_config_dir }}/password.txt"
+    mode: "0600"
+  no_log: true
   tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
 
 - name: Deploy private backup.env with secrets (0600, no_log)
   ansible.builtin.template:
     src: backup.env.j2
-    dest: "{{ rustic_darwin_support_dir }}/config/backup.env"
+    dest: "{{ rustic_darwin_config_dir }}/backup.env"
     mode: "0600"
   no_log: true
   tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
@@ -67,7 +76,7 @@
 - name: Deploy LaunchAgent plist for local backup
   ansible.builtin.template:
     src: rustic-local.plist.j2
-    dest: "{{ (ansible_env.HOME | default('~')) }}/Library/LaunchAgents/{{ rustic_darwin_launchd_local_label }}.plist"
+    dest: "{{ rustic_darwin_launchagents_dir }}/{{ rustic_darwin_launchd_local_label }}.plist"
     mode: "0644"
   register: rustic_darwin_local_plist
   tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
@@ -75,7 +84,7 @@
 - name: Deploy LaunchAgent plist for cloud backup
   ansible.builtin.template:
     src: rustic-cloud.plist.j2
-    dest: "{{ (ansible_env.HOME | default('~')) }}/Library/LaunchAgents/{{ rustic_darwin_launchd_cloud_label }}.plist"
+    dest: "{{ rustic_darwin_launchagents_dir }}/{{ rustic_darwin_launchd_cloud_label }}.plist"
     mode: "0644"
   register: rustic_darwin_cloud_plist
   tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]

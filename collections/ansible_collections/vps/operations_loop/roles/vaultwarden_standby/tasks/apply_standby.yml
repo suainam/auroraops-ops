@@ -230,6 +230,7 @@
     app_timer_on_calendar: "{{ vaultwarden_standby_timer_calendar }}"
     app_timer_persistent: true
     app_timer_randomized_delay: "0"
+    app_timer_environment: "{{ app_service_environment }}"
     app_timer_enabled: "{{ vaultwarden_standby_timer_enabled | bool }}"
     app_timer_state: "{{ 'started' if vaultwarden_standby_timer_enabled | bool else 'stopped' }}"
 

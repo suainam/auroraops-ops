@@ -23,13 +23,13 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable
 
 try:
     from datetime import UTC
 except ImportError:
     UTC = timezone.utc
-from pathlib import Path
-from typing import Any, Iterable
 
 
 FORBIDDEN_NAMES = {

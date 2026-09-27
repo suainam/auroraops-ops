@@ -91,6 +91,8 @@ rustic_darwin_log_dir: "{{ rustic_darwin_support_dir }}/logs"
 rustic_darwin_run_dir: "{{ rustic_darwin_support_dir }}/run"
 rustic_darwin_tmp_dir: "{{ rustic_darwin_support_dir }}/tmp"
 rustic_bin_path: "rustic"
+rustic_darwin_launchd_local_label: "com.auroraops.rustic-local"
+rustic_darwin_launchd_cloud_label: "com.auroraops.rustic-cloud"
 rustic_local_backup_timer_minute: "*/20"
 rustic_cloud_backup_timer_minute: "17"
 rustic_darwin_rollback_remove_support: false

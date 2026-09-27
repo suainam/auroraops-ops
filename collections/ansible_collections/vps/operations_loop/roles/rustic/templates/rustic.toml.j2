@@ -3,6 +3,5 @@
 # 注意: retention 策略由 rustic_backup.py 通过 CLI 参数控制，不在此处配置
 
 [repository]
-repository = "{{ backup_base_dir }}/complete"
+repository = "{{ rustic_backup_base_dir }}/complete"
 password-file = "{{ rustic_password_file | default('/etc/rustic/password.txt') }}"
-

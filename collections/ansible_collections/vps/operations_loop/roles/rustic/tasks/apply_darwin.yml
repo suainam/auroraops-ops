@@ -2,7 +2,7 @@
 - name: Install Rustic and rclone via Homebrew
   community.general.homebrew:
     name:
-      - rustic-rs/tap/rustic
+      - rustic
       - rclone
     state: present
   tags: [deploy, operations_loop, rustic, rustic_install, phase7]

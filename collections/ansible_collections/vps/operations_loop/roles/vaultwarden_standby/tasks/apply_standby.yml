@@ -226,12 +226,12 @@
   vars:
     app_timer_name: "{{ vaultwarden_standby_service_name }}"
     app_timer_description: "Vaultwarden passive snapshot synchronization every 5 minutes"
+    app_timer_exec_start: "{{ python_executor }} {{ vaultwarden_standby_script_path }} sync"
     app_timer_on_calendar: "{{ vaultwarden_standby_timer_calendar }}"
     app_timer_persistent: true
     app_timer_randomized_delay: "0"
     app_timer_enabled: "{{ vaultwarden_standby_timer_enabled | bool }}"
     app_timer_state: "{{ 'started' if vaultwarden_standby_timer_enabled | bool else 'stopped' }}"
-  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_sync, phase7]
 
 - name: Stop and disable stale Vaultwarden DR health timer in snapshot-only mode
   become: true

@@ -193,7 +193,12 @@
     app_service_working_directory: "{{ vaultwarden_standby_root }}"
     app_service_environment:
       VAULTWARDEN_STANDBY_ROOT: "{{ vaultwarden_standby_root }}"
-      VAULTWARDEN_STANDBY_SOURCE: "{{ vaultwarden_standby_source_user }}@{{ vaultwarden_standby_source_host }}::{{ vaultwarden_standby_source_module }}/"
+      VAULTWARDEN_STANDBY_SOURCE: >-
+        {{
+          (vaultwarden_standby_source_user ~ '@' ~ vaultwarden_standby_source_host ~ ':' ~ vaultwarden_standby_source_snapshot_path)
+          if (vaultwarden_standby_source_snapshot_path is defined and vaultwarden_standby_source_snapshot_path | length > 0)
+          else (vaultwarden_standby_source_user ~ '@' ~ vaultwarden_standby_source_host ~ '::' ~ vaultwarden_standby_source_module ~ '/')
+        }}
       VAULTWARDEN_STANDBY_SOURCE_PORT: "{{ vaultwarden_standby_source_port }}"
       VAULTWARDEN_STANDBY_SSH_KEY: "{{ vaultwarden_standby_ssh_key }}"
       VAULTWARDEN_STANDBY_KNOWN_HOSTS: "{{ vaultwarden_standby_known_hosts }}"

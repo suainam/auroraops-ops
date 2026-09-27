@@ -1,0 +1,143 @@
+---
+- name: Verify Darwin Rustic deployment
+  tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+  block:
+    - name: Preflight Rustic runtime capabilities for Darwin verification
+      ansible.builtin.import_tasks: preflight.yml
+      tags: [verify, operations_loop, rustic, rustic_preflight, phase7]
+
+    - name: Check Rustic script is deployed
+      ansible.builtin.stat:
+        path: "{{ rustic_darwin_script_path }}"
+      register: rustic_darwin_script_stat
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Assert Rustic script is deployed
+      ansible.builtin.assert:
+        that:
+          - rustic_darwin_script_stat.stat.exists
+        fail_msg: Rustic backup script is missing at {{ rustic_darwin_script_path }}
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Read deployed Rustic script capabilities
+      ansible.builtin.command:
+        argv:
+          - "{{ rustic_darwin_script_path }}"
+          - capabilities
+      environment:
+        PATH: "{{ ansible_env.PATH }}:/opt/homebrew/bin:/usr/local/bin"
+        HOME: "{{ ansible_env.HOME }}"
+      register: rustic_darwin_capabilities_result
+      changed_when: false
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Parse deployed Rustic script capabilities
+      ansible.builtin.set_fact:
+        rustic_darwin_deployed_capabilities: "{{ rustic_darwin_capabilities_result.stdout | from_json }}"
+      changed_when: false
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Assert deployed Rustic script supports evidence actions
+      ansible.builtin.assert:
+        that:
+          - rustic_darwin_deployed_capabilities.schema == 'auroraops.rustic-capabilities/v1'
+          - "'local' in rustic_darwin_deployed_capabilities.actions"
+          - "'cloud' in rustic_darwin_deployed_capabilities.actions"
+          - "'check' in rustic_darwin_deployed_capabilities.actions"
+          - "'inspect' in rustic_darwin_deployed_capabilities.actions"
+          - "'restore-probe' in rustic_darwin_deployed_capabilities.actions"
+        fail_msg: Deployed Rustic script is stale or lacks lifecycle evidence actions
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Inspect identity-bound Rustic repository snapshots
+      ansible.builtin.command:
+        argv:
+          - "{{ rustic_darwin_script_path }}"
+          - inspect
+      environment:
+        PATH: "{{ ansible_env.PATH }}:/opt/homebrew/bin:/usr/local/bin"
+        HOME: "{{ ansible_env.HOME }}"
+      register: rustic_darwin_repository_inspection_result
+      changed_when: false
+      no_log: true
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Parse identity-bound Rustic repository snapshots
+      no_log: true
+      ansible.builtin.set_fact:
+        rustic_darwin_repository_inspection: "{{ rustic_darwin_repository_inspection_result.stdout | from_json }}"
+      changed_when: false
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Assert every configured Rustic repository has readable snapshots
+      ansible.builtin.assert:
+        that:
+          - rustic_darwin_repository_inspection.repositories | length
+            == (rustic_backup_cloud_remotes | length + 1)
+          - rustic_darwin_repository_inspection.repositories
+            | map(attribute='repository_id') | select | list | length
+            == rustic_darwin_repository_inspection.repositories | length
+          - rustic_darwin_repository_inspection.repositories
+            | map(attribute='snapshot_count') | map('int') | list | min > 0
+          - rustic_darwin_repository_inspection.repositories
+            | map(attribute='latest_snapshot_id') | select | list | length
+            == rustic_darwin_repository_inspection.repositories | length
+        fail_msg: One or more Rustic repositories lack identity-bound snapshot evidence
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Report safe Rustic repository evidence
+      ansible.builtin.debug:
+        msg: >-
+          repository_id={{ item.repository_id }}
+          latest_snapshot_id={{ item.latest_snapshot_id }}
+          latest_snapshot_time={{ item.latest_snapshot_time }}
+          snapshot_count={{ item.snapshot_count }}
+      loop: "{{ rustic_darwin_repository_inspection.repositories }}"
+      loop_control:
+        label: "{{ item.repository }}"
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Check split Rustic LaunchAgent plist files
+      ansible.builtin.stat:
+        path: "{{ rustic_darwin_launchagents_dir }}/{{ item }}"
+      loop:
+        - com.auroraops.rustic-local.plist
+        - com.auroraops.rustic-cloud.plist
+      register: rustic_darwin_plist_files
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Assert split Rustic LaunchAgent plist files exist
+      ansible.builtin.assert:
+        that:
+          - rustic_darwin_plist_files.results | map(attribute='stat.exists') | list | min
+        fail_msg: One or more Rustic LaunchAgent plist files are missing
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Check split Rustic LaunchAgent jobs are loaded
+      ansible.builtin.command:
+        argv:
+          - launchctl
+          - print
+          - gui/$(id -u)/{{ item }}
+      register: rustic_darwin_launchd_state
+      changed_when: false
+      failed_when: false
+      loop:
+        - com.auroraops.rustic-local
+        - com.auroraops.rustic-cloud
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Assert split Rustic LaunchAgent jobs are loaded
+      ansible.builtin.assert:
+        that:
+          - item.stdout | length > 0
+        fail_msg: "{{ item.item }} must be loaded in launchd"
+      loop: "{{ rustic_darwin_launchd_state.results }}"
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Report Darwin Rustic verification state
+      ansible.builtin.debug:
+        msg: >-
+          Split agents: {{ rustic_darwin_plist_files.results | map(attribute='stat.exists') | list }}
+          Loaded agents: {{ rustic_darwin_launchd_state.results | map(attribute='rc') | list }}
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]

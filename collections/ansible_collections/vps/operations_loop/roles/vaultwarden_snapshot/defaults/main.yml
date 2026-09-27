@@ -1,8 +1,8 @@
 ---
 vaultwarden_snapshot_service_name: "vaultwarden-snapshot"
-vaultwarden_snapshot_script_path: "/usr/local/sbin/vaultwarden_snapshot.py"
-vaultwarden_snapshot_source_dir: "/opt/dockers/vaultwarden/data"
-vaultwarden_snapshot_root: "/opt/backups/vaultwarden-snapshots"
+vaultwarden_snapshot_script_path: "{{ (ansible_env.HOME | default('~')) ~ '/Library/Application Support/AuroraOps/vaultwarden_snapshot/vaultwarden_snapshot.py' if ansible_system == 'Darwin' else '/usr/local/sbin/vaultwarden_snapshot.py' }}"
+vaultwarden_snapshot_source_dir: "{{ (ansible_env.HOME | default('~')) ~ '/data/dockers/vaultwarden/data' if ansible_system == 'Darwin' else '/opt/dockers/vaultwarden/data' }}"
+vaultwarden_snapshot_root: "{{ (ansible_env.HOME | default('~')) ~ '/data/backups/vaultwarden-snapshots' if ansible_system == 'Darwin' else '/opt/backups/vaultwarden-snapshots' }}"
 vaultwarden_snapshot_container: "vaultwarden"
 vaultwarden_snapshot_health_url: "http://127.0.0.1:{{ app_port_vaultwarden_http | default(30007) }}/alive"
 vaultwarden_snapshot_retention: 12
@@ -14,3 +14,7 @@ vaultwarden_snapshot_notifier_python: "{{ health_checks_python_interpreter_path 
 vaultwarden_snapshot_notify_failure: true
 vaultwarden_snapshot_create_now: false
 vaultwarden_snapshot_rollback_remove_snapshots: false
+vaultwarden_snapshot_launchd_label: "com.auroraops.vaultwarden-snapshot"
+vaultwarden_snapshot_launchd_plist_path: "{{ (ansible_env.HOME | default('~')) }}/Library/LaunchAgents/{{ vaultwarden_snapshot_launchd_label }}.plist"
+vaultwarden_snapshot_launchd_interval_seconds: 600
+vaultwarden_snapshot_log_dir: "{{ (ansible_env.HOME | default('~')) }}/Library/Logs/AuroraOps"

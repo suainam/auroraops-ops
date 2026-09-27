@@ -1,0 +1,126 @@
+---
+# Darwin-specific Rustic deployment - Homebrew + launchd
+# Runs as current user (no become), uses ~/Library paths
+
+- name: Assert Homebrew is available on Darwin
+  ansible.builtin.command: brew --version
+  register: rustic_darwin_brew_version
+  changed_when: false
+  failed_when: rustic_darwin_brew_version.rc != 0
+  tags: [deploy, operations_loop, rustic, rustic_install, phase7]
+
+- name: Install Rustic and rclone via Homebrew
+  community.general.homebrew:
+    name:
+      - rustic
+      - rclone
+    state: present
+  tags: [deploy, operations_loop, rustic, rustic_install, phase7]
+
+- name: Create Application Support directories for Rustic
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0700"
+  loop:
+    - "{{ rustic_darwin_support_dir }}/config"
+    - "{{ rustic_darwin_support_dir }}/logs"
+    - "{{ rustic_darwin_support_dir }}/run"
+    - "{{ rustic_darwin_support_dir }}/repo"
+    - "{{ rustic_darwin_support_dir }}/tmp"
+  tags: [deploy, operations_loop, rustic, rustic_init, phase7]
+
+- name: Deploy Rustic backup script to Application Support
+  ansible.builtin.copy:
+    src: rustic_backup.py
+    dest: "{{ rustic_darwin_support_dir }}/config/rustic_backup.py"
+    mode: "0755"
+  tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+- name: Deploy Rustic configuration (rustic.toml)
+  ansible.builtin.template:
+    src: rustic.toml.j2
+    dest: "{{ rustic_darwin_support_dir }}/config/rustic.toml"
+    mode: "0600"
+  tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+- name: Deploy exclude file
+  ansible.builtin.template:
+    src: exclude.txt.j2
+    dest: "{{ rustic_darwin_support_dir }}/config/exclude.txt"
+    mode: "0644"
+  tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+- name: Deploy private backup.env with secrets (0600, no_log)
+  ansible.builtin.template:
+    src: backup.env.j2
+    dest: "{{ rustic_darwin_support_dir }}/config/backup.env"
+    mode: "0600"
+  no_log: true
+  tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+- name: Initialize local Rustic repository
+  ansible.builtin.command:
+    argv:
+      - "{{ rustic_darwin_support_dir }}/config/rustic_backup.py"
+      - init
+  environment:
+    RUSTIC_BIN_PATH: "{{ rustic_bin_path }}"
+    PATH: "{{ ansible_env.PATH }}:/opt/homebrew/bin:/usr/local/bin"
+    HOME: "{{ ansible_env.HOME }}"
+  register: rustic_darwin_init_local
+  changed_when: rustic_darwin_init_local.rc == 0
+  failed_when: rustic_darwin_init_local.rc != 0 and "already initialized" not in rustic_darwin_init_local.stderr
+  tags: [deploy, operations_loop, rustic, rustic_init, phase7]
+
+- name: Initialize cloud Rustic repositories
+  ansible.builtin.command:
+    argv:
+      - "{{ rustic_darwin_support_dir }}/config/rustic_backup.py"
+      - init
+      - cloud
+  environment:
+    RUSTIC_BIN_PATH: "{{ rustic_bin_path }}"
+    PATH: "{{ ansible_env.PATH }}:/opt/homebrew/bin:/usr/local/bin"
+    HOME: "{{ ansible_env.HOME }}"
+  register: rustic_darwin_init_cloud
+  changed_when: rustic_darwin_init_cloud.rc == 0
+  failed_when: rustic_darwin_init_cloud.rc != 0 and "already initialized" not in rustic_darwin_init_cloud.stderr
+  tags: [deploy, operations_loop, rustic, rustic_init, phase7]
+
+- name: Create LaunchAgent plist for local backup
+  ansible.builtin.template:
+    src: rustic-local.plist.j2
+    dest: "{{ rustic_darwin_launchagents_dir }}/com.auroraops.rustic-local.plist"
+    mode: "0644"
+  tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+- name: Create LaunchAgent plist for cloud backup
+  ansible.builtin.template:
+    src: rustic-cloud.plist.j2
+    dest: "{{ rustic_darwin_launchagents_dir }}/com.auroraops.rustic-cloud.plist"
+    mode: "0644"
+  tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+- name: Load and enable local backup LaunchAgent
+  community.general.launchd:
+    name: "{{ rustic_darwin_launchagents_dir }}/com.auroraops.rustic-local.plist"
+    enabled: true
+    state: started
+  tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+- name: Load and enable cloud backup LaunchAgent
+  community.general.launchd:
+    name: "{{ rustic_darwin_launchagents_dir }}/com.auroraops.rustic-cloud.plist"
+    enabled: true
+    state: started
+  tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+- name: Report Darwin Rustic deployment complete
+  ansible.builtin.debug:
+    msg: >-
+      Darwin Rustic deployed with launchd timers.
+      Local repo: {{ rustic_darwin_local_repo }}
+      Cloud remotes: {{ rustic_backup_cloud_remotes }}
+      Config: {{ rustic_darwin_support_dir }}/config
+  tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]

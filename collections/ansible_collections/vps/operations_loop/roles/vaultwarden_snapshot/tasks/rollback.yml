@@ -1,4 +1,10 @@
 ---
+- name: Include Darwin rollback tasks
+  ansible.builtin.include_tasks:
+    file: rollback_darwin.yml
+  when: ansible_system == 'Darwin'
+  tags: [rollback, operations_loop, vaultwarden_snapshot, phase7]
+
 - name: Check Vaultwarden snapshot units before rollback
   become: true
   ansible.builtin.stat:
@@ -7,6 +13,7 @@
     - "/etc/systemd/system/{{ vaultwarden_snapshot_service_name }}.service"
     - "/etc/systemd/system/{{ vaultwarden_snapshot_service_name }}.timer"
   register: vaultwarden_snapshot_rollback_units
+  when: ansible_system != 'Darwin'
   tags: [rollback, operations_loop, vaultwarden_snapshot, phase7]
 
 - name: Stop and disable Vaultwarden snapshot timer
@@ -15,7 +22,9 @@
     name: "{{ vaultwarden_snapshot_service_name }}.timer"
     enabled: false
     state: stopped
-  when: vaultwarden_snapshot_rollback_units.results[1].stat.exists
+  when:
+    - ansible_system != 'Darwin'
+    - vaultwarden_snapshot_rollback_units.results[1].stat.exists
   tags: [rollback, operations_loop, vaultwarden_snapshot, phase7]
 
 - name: Stop Vaultwarden snapshot service
@@ -24,7 +33,9 @@
     name: "{{ vaultwarden_snapshot_service_name }}.service"
     enabled: false
     state: stopped
-  when: vaultwarden_snapshot_rollback_units.results[0].stat.exists
+  when:
+    - ansible_system != 'Darwin'
+    - vaultwarden_snapshot_rollback_units.results[0].stat.exists
   tags: [rollback, operations_loop, vaultwarden_snapshot, phase7]
 
 - name: Remove Vaultwarden snapshot managed files
@@ -36,12 +47,14 @@
     - "/etc/systemd/system/{{ vaultwarden_snapshot_service_name }}.timer"
     - "/etc/systemd/system/{{ vaultwarden_snapshot_service_name }}.service"
     - "{{ vaultwarden_snapshot_script_path }}"
+  when: ansible_system != 'Darwin'
   tags: [rollback, operations_loop, vaultwarden_snapshot, phase7]
 
 - name: Reload systemd after Vaultwarden snapshot rollback
   become: true
   ansible.builtin.systemd:
     daemon_reload: true
+  when: ansible_system != 'Darwin'
   tags: [rollback, operations_loop, vaultwarden_snapshot, phase7]
 
 - name: Remove Vaultwarden snapshot data only when explicitly requested
@@ -49,5 +62,7 @@
   ansible.builtin.file:
     path: "{{ vaultwarden_snapshot_root }}"
     state: absent
-  when: vaultwarden_snapshot_rollback_remove_snapshots | bool
+  when:
+    - ansible_system != 'Darwin'
+    - vaultwarden_snapshot_rollback_remove_snapshots | bool
   tags: [rollback, operations_loop, vaultwarden_snapshot, phase7]

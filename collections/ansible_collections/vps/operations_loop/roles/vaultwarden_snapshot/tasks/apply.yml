@@ -1,9 +1,16 @@
 ---
+- name: Include Darwin snapshot tasks
+  ansible.builtin.include_tasks:
+    file: apply_darwin.yml
+  when: ansible_system == 'Darwin'
+  tags: [deploy, operations_loop, vaultwarden_snapshot, phase7]
+
 - name: Check Vaultwarden data directory
   become: true
   ansible.builtin.stat:
     path: "{{ vaultwarden_snapshot_source_dir }}"
   register: vaultwarden_snapshot_source_stat
+  when: ansible_system != 'Darwin'
   tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_preflight, phase7]
 
 - name: Validate Vaultwarden snapshot preconditions
@@ -13,6 +20,7 @@
       - vaultwarden_snapshot_retention | int >= 1
       - vaultwarden_snapshot_timer_calendar | string | length > 0
     fail_msg: "Vaultwarden snapshot source or configuration is invalid"
+  when: ansible_system != 'Darwin'
   tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_preflight, phase7]
 
 - name: Check Vaultwarden container state
@@ -30,6 +38,7 @@
   failed_when: >-
     vaultwarden_snapshot_container_state.rc != 0
     or vaultwarden_snapshot_container_state.stdout | trim != 'true'
+  when: ansible_system != 'Darwin'
   tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_preflight, phase7]
 
 - name: Ensure Vaultwarden snapshot root exists
@@ -40,6 +49,7 @@
     owner: root
     group: root
     mode: "0700"
+  when: ansible_system != 'Darwin'
   tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_install, phase7]
 
 - name: Install Vaultwarden snapshot CLI
@@ -50,6 +60,7 @@
     owner: root
     group: root
     mode: "0750"
+  when: ansible_system != 'Darwin'
   tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_install, phase7]
 
 - name: Deploy Vaultwarden snapshot service
@@ -82,6 +93,7 @@
     app_service_restart: "no"
     app_service_enabled: false
     app_service_state: stopped
+  when: ansible_system != 'Darwin'
   tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_service, phase7]
 
 - name: Deploy Vaultwarden snapshot timer
@@ -94,10 +106,12 @@
     app_timer_persistent: true
     app_timer_enabled: true
     app_timer_state: started
+  when: ansible_system != 'Darwin'
   tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_timer, phase7]
 
 - name: Flush Vaultwarden snapshot unit handlers
   ansible.builtin.meta: flush_handlers
+  when: ansible_system != 'Darwin'
   tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_service, phase7]
 
 - name: Check for an initial published Vaultwarden snapshot
@@ -105,6 +119,7 @@
   ansible.builtin.stat:
     path: "{{ vaultwarden_snapshot_root }}/latest.json"
   register: vaultwarden_snapshot_latest_stat
+  when: ansible_system != 'Darwin'
   tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_create, phase7]
 
 - name: Create requested or initial Vaultwarden snapshot
@@ -113,6 +128,7 @@
     name: "{{ vaultwarden_snapshot_service_name }}.service"
     state: started
   when:
+    - ansible_system != 'Darwin'
     - not ansible_check_mode
     - vaultwarden_snapshot_create_now | bool or not vaultwarden_snapshot_latest_stat.stat.exists
   tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_create, phase7]

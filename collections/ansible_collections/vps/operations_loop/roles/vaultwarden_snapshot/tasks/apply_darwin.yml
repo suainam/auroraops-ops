@@ -1,0 +1,96 @@
+---
+- name: Check Vaultwarden data directory (Darwin)
+  ansible.builtin.stat:
+    path: "{{ vaultwarden_snapshot_source_dir }}"
+  register: vaultwarden_snapshot_source_stat
+  tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_preflight, phase7]
+
+- name: Validate Vaultwarden snapshot preconditions (Darwin)
+  ansible.builtin.assert:
+    that:
+      - vaultwarden_snapshot_source_stat.stat.isdir | default(false)
+      - vaultwarden_snapshot_retention | int >= 1
+      - vaultwarden_snapshot_launchd_interval_seconds | int >= 60
+    fail_msg: "Vaultwarden snapshot source or configuration is invalid on Darwin"
+  tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_preflight, phase7]
+
+- name: Check Vaultwarden container state (Darwin)
+  ansible.builtin.command:
+    argv:
+      - docker
+      - inspect
+      - --format
+      - "{{ '{{' }}.State.Running{{ '}}' }}"
+      - "{{ vaultwarden_snapshot_container }}"
+  register: vaultwarden_snapshot_container_state
+  check_mode: false
+  changed_when: false
+  failed_when: >-
+    vaultwarden_snapshot_container_state.rc != 0
+    or vaultwarden_snapshot_container_state.stdout | trim != 'true'
+  tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_preflight, phase7]
+
+- name: Ensure Vaultwarden snapshot and script directories exist (Darwin)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ vaultwarden_snapshot_root }}", mode: "0700" }
+    - { path: "{{ vaultwarden_snapshot_script_path | dirname }}", mode: "0755" }
+    - { path: "{{ vaultwarden_snapshot_log_dir }}", mode: "0755" }
+    - { path: "{{ vaultwarden_snapshot_launchd_plist_path | dirname }}", mode: "0755" }
+  tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_install, phase7]
+
+- name: Install Vaultwarden snapshot CLI (Darwin)
+  ansible.builtin.copy:
+    src: vaultwarden_snapshot.py
+    dest: "{{ vaultwarden_snapshot_script_path }}"
+    mode: "0750"
+  tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_install, phase7]
+
+- name: Deploy Vaultwarden snapshot launchd plist (Darwin)
+  ansible.builtin.template:
+    src: vaultwarden_snapshot.plist.j2
+    dest: "{{ vaultwarden_snapshot_launchd_plist_path }}"
+    mode: "0644"
+  register: vaultwarden_snapshot_plist_result
+  tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_service, phase7]
+
+- name: Manage Vaultwarden snapshot LaunchAgent (Darwin)
+  community.general.launchd:
+    name: "{{ vaultwarden_snapshot_launchd_label }}"
+    state: restarted
+  when: vaultwarden_snapshot_plist_result.changed
+  tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_service, phase7]
+
+- name: Ensure Vaultwarden snapshot LaunchAgent is loaded (Darwin)
+  community.general.launchd:
+    name: "{{ vaultwarden_snapshot_launchd_label }}"
+    state: started
+  tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_service, phase7]
+
+- name: Check for an initial published Vaultwarden snapshot (Darwin)
+  ansible.builtin.stat:
+    path: "{{ vaultwarden_snapshot_root }}/latest.json"
+  register: vaultwarden_snapshot_latest_stat
+  tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_create, phase7]
+
+- name: Create requested or initial Vaultwarden snapshot (Darwin)
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default(ansible_playbook_python) | default('/usr/bin/python3') }}"
+      - "{{ vaultwarden_snapshot_script_path }}"
+      - create
+  environment:
+    VAULTWARDEN_SNAPSHOT_SOURCE_DIR: "{{ vaultwarden_snapshot_source_dir }}"
+    VAULTWARDEN_SNAPSHOT_ROOT: "{{ vaultwarden_snapshot_root }}"
+    VAULTWARDEN_SNAPSHOT_CONTAINER: "{{ vaultwarden_snapshot_container }}"
+    VAULTWARDEN_SNAPSHOT_HEALTH_URL: "{{ vaultwarden_snapshot_health_url }}"
+    VAULTWARDEN_SNAPSHOT_RETENTION: "{{ vaultwarden_snapshot_retention }}"
+    VAULTWARDEN_SNAPSHOT_HOSTNAME: "{{ inventory_hostname }}"
+    VAULTWARDEN_SNAPSHOT_NOTIFY_FAILURE: "{{ vaultwarden_snapshot_notify_failure | bool | ternary('true', 'false') }}"
+  when:
+    - not ansible_check_mode
+    - vaultwarden_snapshot_create_now | bool or not vaultwarden_snapshot_latest_stat.stat.exists
+  tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_create, phase7]

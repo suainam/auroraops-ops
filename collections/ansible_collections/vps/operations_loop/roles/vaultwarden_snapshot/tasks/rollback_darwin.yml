@@ -1,0 +1,30 @@
+---
+- name: Check Vaultwarden snapshot LaunchAgent plist before rollback (Darwin)
+  ansible.builtin.stat:
+    path: "{{ vaultwarden_snapshot_launchd_plist_path }}"
+  register: vaultwarden_snapshot_rollback_plist_stat
+  tags: [rollback, operations_loop, vaultwarden_snapshot, phase7]
+
+- name: Unload Vaultwarden snapshot LaunchAgent (Darwin)
+  community.general.launchd:
+    name: "{{ vaultwarden_snapshot_launchd_label }}"
+    state: unloaded
+  when: vaultwarden_snapshot_rollback_plist_stat.stat.exists
+  failed_when: false
+  tags: [rollback, operations_loop, vaultwarden_snapshot, phase7]
+
+- name: Remove Vaultwarden snapshot role-owned files (Darwin)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ vaultwarden_snapshot_launchd_plist_path }}"
+    - "{{ vaultwarden_snapshot_script_path }}"
+  tags: [rollback, operations_loop, vaultwarden_snapshot, phase7]
+
+- name: Remove Vaultwarden snapshot data only when explicitly requested (Darwin)
+  ansible.builtin.file:
+    path: "{{ vaultwarden_snapshot_root }}"
+    state: absent
+  when: vaultwarden_snapshot_rollback_remove_snapshots | bool
+  tags: [rollback, operations_loop, vaultwarden_snapshot, phase7]

@@ -80,3 +80,17 @@ rustic_observe_baseline_mode: false
 
 # Restore 操作类型
 rustic_restore_action: "" # list_snapshots, restore
+
+# Darwin-specific paths and configuration
+rustic_darwin_support_dir: "{{ ansible_env.HOME }}/Library/Application Support/AuroraOps/rustic"
+rustic_darwin_launchagents_dir: "{{ ansible_env.HOME }}/Library/LaunchAgents"
+rustic_darwin_script_path: "{{ rustic_darwin_support_dir }}/config/rustic_backup.py"
+rustic_darwin_local_repo: "{{ rustic_darwin_support_dir }}/repo"
+rustic_darwin_config_dir: "{{ rustic_darwin_support_dir }}/config"
+rustic_darwin_log_dir: "{{ rustic_darwin_support_dir }}/logs"
+rustic_darwin_run_dir: "{{ rustic_darwin_support_dir }}/run"
+rustic_darwin_tmp_dir: "{{ rustic_darwin_support_dir }}/tmp"
+rustic_bin_path: "rustic"
+rustic_local_backup_timer_minute: "*/20"
+rustic_cloud_backup_timer_minute: "17"
+rustic_darwin_rollback_remove_support: false

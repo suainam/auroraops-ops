@@ -1,5 +1,5 @@
 ---
-- name: Roll back Rustic split scheduling without deleting backup data
+- name: Roll back Rustic on Linux (systemd) without deleting backup data
   tags: [rollback, operations_loop, rustic, rustic_rollback, phase7]
   block:
     - name: Gather systemd units before Rustic rollback
@@ -83,8 +83,17 @@
         state: started
       when: not ansible_check_mode
 
-    - name: Report data-preserving Rustic rollback
+    - name: Report data-preserving Rustic rollback on Linux
       ansible.builtin.debug:
         msg: >-
           Restored rustic-backup.service/timer. Preserved /etc/rustic,
           /var/log/rustic, local repositories, and cloud repositories.
+  when: ansible_system != 'Darwin'
+
+- name: Include Darwin rollback tasks
+  ansible.builtin.include_tasks:
+    file: rollback_darwin.yml
+  when:
+    - auroraops_roles['operations_loop']['rustic'] | default(true) | bool
+    - ansible_system == 'Darwin'
+  tags: [rollback, operations_loop, rustic, rustic_rollback, phase7]

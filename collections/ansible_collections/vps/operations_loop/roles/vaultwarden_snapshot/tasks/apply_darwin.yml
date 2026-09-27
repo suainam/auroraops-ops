@@ -61,13 +61,16 @@
   community.general.launchd:
     name: "{{ vaultwarden_snapshot_launchd_label }}"
     state: restarted
-  when: vaultwarden_snapshot_plist_result.changed
+  when:
+    - not ansible_check_mode
+    - vaultwarden_snapshot_plist_result.changed
   tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_service, phase7]
 
 - name: Ensure Vaultwarden snapshot LaunchAgent is loaded (Darwin)
   community.general.launchd:
     name: "{{ vaultwarden_snapshot_launchd_label }}"
     state: started
+  when: not ansible_check_mode
   tags: [deploy, operations_loop, vaultwarden_snapshot, vaultwarden_snapshot_service, phase7]
 
 - name: Check for an initial published Vaultwarden snapshot (Darwin)

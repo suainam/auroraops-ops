@@ -4,7 +4,15 @@
     rustic_runtime_required_remotes: >-
       {{
         (
-          (backup_cloud_remotes | default([]))
+          (
+            rustic_darwin_verify_cloud_remotes
+            if (rustic_darwin_verify_cloud_remotes is defined)
+            else (
+              []
+              if (not (rustic_cloud_backup_enabled | default(true) | bool))
+              else (rustic_backup_cloud_remotes | default(backup_cloud_remotes | default([])))
+            )
+          )
           + (
             [rustic_restore_source]
             if (rustic_restore_mode | default(false) | bool)
@@ -57,7 +65,7 @@
     - phase7
 
 - name: Check Rustic rclone configuration
-  become: true
+  become: "{{ (ansible_system | default('Linux')) != 'Darwin' }}"
   ansible.builtin.stat:
     path: "{{ rustic_rclone_config_path }}"
   register: rustic_rclone_config_stat
@@ -89,7 +97,7 @@
     - phase7
 
 - name: List rclone remotes for Rustic
-  become: true
+  become: "{{ (ansible_system | default('Linux')) != 'Darwin' }}"
   ansible.builtin.command:
     argv:
       - "{{ rustic_rclone_command_check.stdout }}"

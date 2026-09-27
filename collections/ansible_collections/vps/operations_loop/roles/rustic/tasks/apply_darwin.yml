@@ -11,6 +11,7 @@
   ansible.builtin.set_fact:
     rustic_darwin_bin_path: "{{ '/opt/homebrew/bin/rustic' if ansible_architecture == 'arm64' else '/usr/local/bin/rustic' }}"
     rclone_darwin_bin_path: "{{ '/opt/homebrew/bin/rclone' if ansible_architecture == 'arm64' else '/usr/local/bin/rclone' }}"
+    rustic_bin_path: "{{ '/opt/homebrew/bin/rustic' if ansible_architecture == 'arm64' else '/usr/local/bin/rustic' }}"
   tags: [deploy, operations_loop, rustic, rustic_install, phase7]
 
 - name: Create Application Support directories for Rustic

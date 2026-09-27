@@ -16,7 +16,7 @@
         <key>Hour</key>
         <integer>{{ hour }}</integer>
         <key>Minute</key>
-        <integer>17</integer>
+        <integer>{{ rustic_cloud_backup_timer_minute | default(17) }}</integer>
       </dict>
     {% endfor %}
     </array>
@@ -27,7 +27,9 @@
         <key>RUSTIC_ENV_FILE</key>
         <string>{{ rustic_darwin_config_dir }}/backup.env</string>
         <key>RUSTIC_BIN_PATH</key>
-        <string>{{ rustic_bin_path }}</string>
+        <string>{{ rustic_darwin_bin_path | default(rustic_bin_path) }}</string>
+        <key>RCLONE_CONFIG</key>
+        <string>{{ rustic_darwin_rclone_config_path | default(rustic_rclone_config_path) }}</string>
         <key>PATH</key>
         <string>{{ ansible_env.PATH }}:/opt/homebrew/bin:/usr/local/bin</string>
         <key>HOME</key>

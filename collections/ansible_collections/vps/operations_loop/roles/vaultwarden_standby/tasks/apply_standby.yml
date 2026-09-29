@@ -161,7 +161,7 @@
     owner: "{{ vaultwarden_standby_effective_user }}"
     group: "{{ vaultwarden_standby_effective_group }}"
     mode: "0600"
-    force: true
+    force: false
   when: not (vaultwarden_standby_snapshot_only | bool)
   tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_dr, phase7]
 

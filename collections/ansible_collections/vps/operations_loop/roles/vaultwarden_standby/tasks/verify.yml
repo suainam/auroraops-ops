@@ -294,9 +294,11 @@
       - sillytavern
   register: vaultwarden_standby_sillytavern_inspect
   changed_when: false
+  failed_when: false
   when:
     - vaultwarden_standby_mode == 'standby'
     - not (vaultwarden_standby_snapshot_only | bool)
+    - "'sillytavern' in (docker_apps_containers | default([]))"
   tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_container, phase7]
 
 - name: Warn when Raspberry Pi kernel cannot enforce the Vaultwarden memory limit
@@ -328,8 +330,13 @@
       - (vaultwarden_standby_container_inspect.stdout | from_json)[0].HostConfig.PortBindings['3012/tcp'][0].HostIp == '127.0.0.1'
       - (vaultwarden_standby_container_inspect.stdout | from_json)[0].HostConfig.PortBindings['3012/tcp'][0].HostPort == app_port_vaultwarden_ws | string
       - (vaultwarden_standby_image_inspect.stdout | from_json)[0].Architecture == 'arm64'
-      - (vaultwarden_standby_sillytavern_inspect.stdout | from_json)[0].State.Running == true
-      - (vaultwarden_standby_sillytavern_inspect.stdout | from_json)[0].HostConfig.PortBindings['8000/tcp'][0].HostPort == '8000'
+      - >-
+        ('sillytavern' not in (docker_apps_containers | default([])))
+        or (
+          vaultwarden_standby_sillytavern_inspect.rc == 0
+          and (vaultwarden_standby_sillytavern_inspect.stdout | from_json)[0].State.Running == true
+          and (vaultwarden_standby_sillytavern_inspect.stdout | from_json)[0].HostConfig.PortBindings['8000/tcp'][0].HostPort == '8000'
+        )
     fail_msg: "Vaultwarden standby runtime contract is not satisfied"
   when:
     - vaultwarden_standby_mode == 'standby'

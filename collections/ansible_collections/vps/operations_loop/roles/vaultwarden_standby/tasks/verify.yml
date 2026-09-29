@@ -245,7 +245,9 @@
       - (vaultwarden_standby_dr_status_result.stdout | from_json).latest_snapshot_status == 'valid'
       - (vaultwarden_standby_dr_status_result.stdout | from_json).snapshot_age_seconds | int <= vaultwarden_standby_max_age_seconds | int
       - (vaultwarden_standby_dr_status_result.stdout | from_json).container_status in ['created', 'exited']
-      - (vaultwarden_standby_dr_status_result.stdout | from_json).tunnel_ready_status == 200
+      - >-
+        (not (cloudflared_enabled | default(true) | bool))
+        or ((vaultwarden_standby_dr_status_result.stdout | from_json).tunnel_ready_status == 200)
       - (vaultwarden_standby_dr_status_result.stdout | from_json).primary_health_url == vaultwarden_standby_dr_primary_health_url
     fail_msg: "Vaultwarden manual DR passive contract is not satisfied"
   when:
@@ -292,9 +294,11 @@
       - sillytavern
   register: vaultwarden_standby_sillytavern_inspect
   changed_when: false
+  failed_when: false
   when:
     - vaultwarden_standby_mode == 'standby'
     - not (vaultwarden_standby_snapshot_only | bool)
+    - "'sillytavern' in (docker_apps_containers | default([]))"
   tags: [verify, operations_loop, vaultwarden_standby, vaultwarden_standby_container, phase7]
 
 - name: Warn when Raspberry Pi kernel cannot enforce the Vaultwarden memory limit
@@ -323,11 +327,15 @@
       - (vaultwarden_standby_container_inspect.stdout | from_json)[0].HostConfig.NanoCpus == 500000000
       - (vaultwarden_standby_container_inspect.stdout | from_json)[0].HostConfig.PortBindings['80/tcp'][0].HostIp == '127.0.0.1'
       - (vaultwarden_standby_container_inspect.stdout | from_json)[0].HostConfig.PortBindings['80/tcp'][0].HostPort == app_port_vaultwarden_http | string
-      - (vaultwarden_standby_container_inspect.stdout | from_json)[0].HostConfig.PortBindings['3012/tcp'][0].HostIp == '127.0.0.1'
-      - (vaultwarden_standby_container_inspect.stdout | from_json)[0].HostConfig.PortBindings['3012/tcp'][0].HostPort == app_port_vaultwarden_ws | string
+      - "'3012/tcp' not in (vaultwarden_standby_container_inspect.stdout | from_json)[0].HostConfig.PortBindings"
       - (vaultwarden_standby_image_inspect.stdout | from_json)[0].Architecture == 'arm64'
-      - (vaultwarden_standby_sillytavern_inspect.stdout | from_json)[0].State.Running == true
-      - (vaultwarden_standby_sillytavern_inspect.stdout | from_json)[0].HostConfig.PortBindings['8000/tcp'][0].HostPort == '8000'
+      - >-
+        ('sillytavern' not in (docker_apps_containers | default([])))
+        or (
+          vaultwarden_standby_sillytavern_inspect.rc == 0
+          and (vaultwarden_standby_sillytavern_inspect.stdout | from_json)[0].State.Running == true
+          and (vaultwarden_standby_sillytavern_inspect.stdout | from_json)[0].HostConfig.PortBindings['8000/tcp'][0].HostPort == '8000'
+        )
     fail_msg: "Vaultwarden standby runtime contract is not satisfied"
   when:
     - vaultwarden_standby_mode == 'standby'

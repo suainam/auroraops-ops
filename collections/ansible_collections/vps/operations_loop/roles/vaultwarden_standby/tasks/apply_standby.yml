@@ -153,6 +153,18 @@
     mode: "0700"
   tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_dr, phase7]
 
+- name: Initialize Vaultwarden manual DR mode to passive
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ vaultwarden_standby_dr_root }}/state/mode.json"
+    content: "{{ {'mode': 'passive', 'snapshot_only': false, 'promotion_supported': true} | to_nice_json }}\n"
+    owner: "{{ vaultwarden_standby_effective_user }}"
+    group: "{{ vaultwarden_standby_effective_group }}"
+    mode: "0600"
+    force: false
+  when: not (vaultwarden_standby_snapshot_only | bool)
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_dr, phase7]
+
 - name: Inspect docker_apps managed Vaultwarden cold standby container
   become: true
   ansible.builtin.command:
@@ -334,9 +346,11 @@
   vars:
     app_timer_name: "{{ vaultwarden_standby_dr_health_service_name }}"
     app_timer_description: "Check Vaultwarden primary health every minute"
+    app_timer_exec_start: "{{ python_executor }} {{ vaultwarden_standby_dr_script_path }} health-check"
     app_timer_on_calendar: "{{ vaultwarden_standby_dr_health_timer_calendar }}"
     app_timer_persistent: true
     app_timer_randomized_delay: "0"
+    app_timer_environment: "{{ app_service_environment }}"
     app_timer_enabled: "{{ vaultwarden_standby_dr_health_timer_enabled | bool }}"
     app_timer_state: "{{ 'started' if vaultwarden_standby_dr_health_timer_enabled | bool else 'stopped' }}"
   tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_dr, phase7]

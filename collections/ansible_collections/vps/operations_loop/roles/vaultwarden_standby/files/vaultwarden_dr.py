@@ -85,13 +85,14 @@ class Config:
         standby_root = Path(
             os.environ.get("VAULTWARDEN_STANDBY_ROOT", "/opt/vaultwarden-standby")
         )
-        snapshot_only_env = os.environ.get("VAULTWARDEN_STANDBY_SNAPSHOT_ONLY", "")
-        mode_env = os.environ.get("VAULTWARDEN_STANDBY_MODE", "")
-        snapshot_only = (
-            snapshot_only_env.lower() in ("true", "1", "yes")
-            or mode_env == "snapshot-only"
-        )
-        if not snapshot_only:
+        snapshot_only_env = os.environ.get("VAULTWARDEN_STANDBY_SNAPSHOT_ONLY")
+        mode_env = os.environ.get("VAULTWARDEN_STANDBY_MODE")
+        if snapshot_only_env is not None:
+            snapshot_only = snapshot_only_env.lower() in ("true", "1", "yes")
+        elif mode_env is not None:
+            snapshot_only = mode_env == "snapshot-only"
+        else:
+            snapshot_only = False
             mode_file = root / "state" / "mode.json"
             if mode_file.is_file():
                 try:

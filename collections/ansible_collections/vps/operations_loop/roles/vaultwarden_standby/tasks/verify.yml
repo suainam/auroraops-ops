@@ -245,7 +245,9 @@
       - (vaultwarden_standby_dr_status_result.stdout | from_json).latest_snapshot_status == 'valid'
       - (vaultwarden_standby_dr_status_result.stdout | from_json).snapshot_age_seconds | int <= vaultwarden_standby_max_age_seconds | int
       - (vaultwarden_standby_dr_status_result.stdout | from_json).container_status in ['created', 'exited']
-      - (vaultwarden_standby_dr_status_result.stdout | from_json).tunnel_ready_status == 200
+      - >-
+        (not (cloudflared_enabled | default(true) | bool))
+        or ((vaultwarden_standby_dr_status_result.stdout | from_json).tunnel_ready_status == 200)
       - (vaultwarden_standby_dr_status_result.stdout | from_json).primary_health_url == vaultwarden_standby_dr_primary_health_url
     fail_msg: "Vaultwarden manual DR passive contract is not satisfied"
   when:

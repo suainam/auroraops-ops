@@ -153,6 +153,18 @@
     mode: "0700"
   tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_dr, phase7]
 
+- name: Initialize Vaultwarden manual DR mode to passive
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ vaultwarden_standby_dr_root }}/state/mode.json"
+    content: "{{ {'mode': 'passive', 'snapshot_only': false, 'promotion_supported': true} | to_nice_json }}\n"
+    owner: "{{ vaultwarden_standby_effective_user }}"
+    group: "{{ vaultwarden_standby_effective_group }}"
+    mode: "0600"
+    force: true
+  when: not (vaultwarden_standby_snapshot_only | bool)
+  tags: [deploy, operations_loop, vaultwarden_standby, vaultwarden_standby_dr, phase7]
+
 - name: Inspect docker_apps managed Vaultwarden cold standby container
   become: true
   ansible.builtin.command:

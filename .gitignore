@@ -1,0 +1,4 @@
+
+# Python bytecode from role helper modules
+__pycache__/
+*.pyc

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -35,6 +36,25 @@ def clean_env(extra: dict[str, str]) -> dict[str, str]:
     return env
 
 
+def has_json_document(raw: str) -> bool:
+    """True only when the output actually contains a JSON report.
+
+    The upstream script always prints cursor-control padding first, so a
+    non-empty stdout proves nothing. On a host missing `jq` it prints padding
+    and then dies, which previously looked like a successful observation.
+    """
+    if not raw:
+        return False
+    start = raw.find("{")
+    if start < 0:
+        return False
+    try:
+        json.loads(strip_ansi(raw[start:]))
+    except ValueError:
+        return False
+    return True
+
+
 def build_socks_url(env: dict[str, str]) -> str:
     server = env.get("IPQUALITY_SOCKS5_SERVER", "").strip()
     port = env.get("IPQUALITY_SOCKS5_PORT", "").strip()
@@ -46,6 +66,14 @@ def build_socks_url(env: dict[str, str]) -> str:
     # socks5h keeps DNS resolution on the exit side, which is what makes the
     # measurement reflect the exit rather than the runner.
     return f"socks5h://{auth}{server}:{port}"
+
+
+def strip_ansi(raw: str) -> str:
+    """Local mirror of the analyzer's cleaner, to avoid an import cycle."""
+    text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", raw)
+    text = re.sub(r"\x1b\][0-9;]*[A-Za-z]", "", text)
+    text = re.sub(r"\x1b[0-9;]*[A-Za-z]", "", text)
+    return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x1b]", "", text)
 
 
 def run_upstream(script: str, args: list[str], socks_url: str,
@@ -69,6 +97,16 @@ def run_upstream(script: str, args: list[str], socks_url: str,
     if not Path(script).is_file():
         return "", f"upstream script not present: {script}"
 
+    # jq is a hard dependency of the upstream script: it parses every database
+    # response through `jq`. Without it the script dies partway and emits only
+    # cursor-control padding, which would otherwise be accepted below as a
+    # successful -- if empty -- observation. Checked up front so the report says
+    # exactly why, instead of recording a vacuous pass.
+    if not any(Path(directory).is_dir() and (Path(directory) / "jq").is_file()
+               for directory in os.environ.get("PATH", "").split(os.pathsep) if directory):
+        return "", ("upstream ipquality requires `jq`, which is not installed; "
+                    "the scoring stage cannot run on this host")
+
     argv = ["bash", script, *args]
     if socks_url:
         # The upstream script builds `-x` from a single argument, so the URL is
@@ -83,9 +121,14 @@ def run_upstream(script: str, args: list[str], socks_url: str,
         return "", "upstream script timed out"
     except OSError as error:
         return "", f"upstream script could not be started: {error}"
-    if not completed.stdout.strip():
-        return "", (completed.stderr.strip()[-400:] or
-                    f"upstream produced no output (rc={completed.returncode})")
+
+    # A non-zero exit, or output that carries no JSON document at all, is a
+    # failed observation. ANSI padding alone must never be reported as success.
+    if not has_json_document(completed.stdout):
+        detail = (completed.stderr or completed.stdout).strip()
+        # Keep the tail: it names the missing dependency or the failing step.
+        return "", (f"upstream produced no JSON report (rc={completed.returncode}): "
+                    f"{detail[-200:]}")
     return completed.stdout, ""
 
 

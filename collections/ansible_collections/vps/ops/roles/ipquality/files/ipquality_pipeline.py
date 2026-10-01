@@ -33,8 +33,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ipquality_analyzer import (  # noqa: E402
-    STRATEGY_NONE,
+    build_remediation,
     evaluate,
+    evaluate_geo_drift,
     parse_upstream_json,
 )
 
@@ -90,25 +91,38 @@ def run(request: dict) -> dict:
         name = entry.get("name", "exit")
         raw = entry.get("raw", "")
         payload = parse_upstream_json(raw) if raw else None
+        observed = probes.get(name) or {}
+        youtube = observed.get("youtube") or dict(UNKNOWN_GEO)
+        google = observed.get("google") or dict(UNKNOWN_GEO)
+
         if payload is None and entry.get("error"):
             # A failed observation still belongs in the report, otherwise a
             # broken exit silently disappears from the audit.
+            #
+            # The geo-drift verdict is evaluated anyway: the two stages are
+            # independent, and stage 2 is pure stdlib. A host missing `jq`
+            # cannot be scored, but it can still be shown to be sent to China,
+            # and discarding that would hide the most actionable finding on
+            # exactly the hosts most likely to need it.
+            drift = evaluate_geo_drift(youtube, google)
+            remediation = build_remediation(
+                {"is_hosting": None, "is_residential": None, "datacenter_votes": []},
+                drift,
+                reroute_targets=limits["reroute_targets"],
+                sentinel_enabled=limits["sentinel_enabled"],
+                residential_available=limits["residential_available"],
+            )
             results.append({
                 "exit_name": name,
                 "parsed": False,
                 "detection": {},
-                "drift": {"geo_drift": False, "verdict": "unknown",
-                          "reason": entry["error"]},
-                "remediation": {"remediation_strategy": STRATEGY_NONE, "reasons": [],
-                                "actions": [], "requires_operator_decision": False},
+                "drift": {**drift, "detection_error": entry["error"]},
+                "remediation": remediation,
                 "violations": [f"exit observation failed: {entry['error']}"],
                 "passed": False,
             })
             continue
 
-        observed = probes.get(name) or {}
-        youtube = observed.get("youtube") or dict(UNKNOWN_GEO)
-        google = observed.get("google") or dict(UNKNOWN_GEO)
         verdict = evaluate(payload, youtube, google, **limits)
         verdict["exit_name"] = name
         results.append(verdict)
@@ -121,6 +135,8 @@ def run(request: dict) -> dict:
             "failed": sum(1 for item in results if not item["passed"]),
             "geo_drift_exits": [item["exit_name"] for item in results
                                 if item["drift"].get("geo_drift")],
+            "unscored_exits": [item["exit_name"] for item in results
+                               if not item.get("parsed")],
             "non_residential_exits": [item["exit_name"] for item in results
                                       if item["detection"].get("is_residential") is not True],
         },

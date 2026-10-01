@@ -52,6 +52,12 @@ ipquality_report_markdown: true
 # removed within the same run, so nothing is left resident on the target.
 ipquality_workdir: "{{ ipquality_report_dir }}/.work"
 
+# Services that must still be healthy after a rollback. The role is read-only, so
+# this is the strongest available proof that it disturbed nothing it does not
+# own. Empty by default because the service manager differs per platform; set it
+# per profile (for example [nginx, sing-box] on an OpenRC NAT guest).
+ipquality_protected_services: []
+
 # Paths rollback must never delete. Note /var and /var/lib are listed even though
 # the default report directory lives under /var/lib: the guard constrains the
 # report directory to a *named* child of /var/lib and rejects these paths only

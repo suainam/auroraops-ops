@@ -1,0 +1,85 @@
+---
+# Stage 8 (rollback_verify): independently assert the host is back at its
+# pre-deployment baseline.
+#
+# This deliberately does NOT re-run the audit. It reads the recorded baseline
+# facts and asserts the post-rollback state against them, so a passing result
+# means the rollback genuinely restored the baseline rather than that a second
+# run happened to agree with the first.
+
+- name: 确认受管报告目录已被回滚清理
+  ansible.builtin.stat:
+    path: "{{ ipquality_report_dir }}"
+  register: ipquality_rollback_dir
+  changed_when: false
+  when: ipquality_enabled | bool
+
+- name: 断言受管产物已完全清理
+  ansible.builtin.assert:
+    that:
+      - not ipquality_rollback_dir.stat.exists
+    fail_msg: >-
+      回滚未完成: {{ ipquality_report_dir }} 仍然存在。
+      本角色是只读审计，回滚必须移除它自己生成的全部产物。
+    success_msg: "受管报告目录已清理，回滚终态符合基线"
+    quiet: true
+  when: ipquality_enabled | bool
+
+# A staged helper left behind would mean the rollback was partial. Probed
+# explicitly rather than inferred from the directory check above, because a
+# surviving file is the exact failure this stage exists to catch.
+- name: 确认没有残留的暂存助手
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: ipquality_leftover_helpers
+  changed_when: false
+  loop:
+    - "{{ ipquality_report_dir }}/ipquality_pipeline.py"
+    - "{{ ipquality_report_dir }}/ipquality_analyzer.py"
+    - "{{ ipquality_report_dir }}/ipquality_geo_probe.py"
+    - "{{ ipquality_report_dir }}/__pycache__"
+    - "{{ ipquality_workdir }}"
+  loop_control:
+    label: "{{ item }}"
+  when: ipquality_enabled | bool
+
+- name: 断言无暂存残留
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists | default(false) | bool == false
+    fail_msg: >-
+      回滚不完整: 仍存在 {{ item.item }}。审计过程不得在目标机留下常驻文件。
+    quiet: true
+  loop: "{{ ipquality_leftover_helpers.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: ipquality_enabled | bool
+
+# The role is read-only, so the strongest rollback guarantee is that it never
+# touched anything it does not own. Assert the declared protected services are
+# still healthy rather than trusting that nothing went wrong.
+- name: 确认既有生产服务未受影响
+  ansible.builtin.command:
+    argv: ["rc-service", "{{ item }}", "status"]
+  register: ipquality_service_checks
+  changed_when: false
+  failed_when: false
+  loop: "{{ ipquality_protected_services }}"
+  loop_control:
+    label: "{{ item }}"
+  when: ipquality_enabled | bool
+
+- name: 断言既有生产服务仍在运行
+  ansible.builtin.assert:
+    that:
+      - item.rc | default(1) == 0
+    fail_msg: >-
+      既有生产服务 {{ item.item }} 状态异常 (rc={{ item.rc | default('?') }})。
+      本角色不应影响任何既有服务。
+    quiet: true
+  loop: "{{ ipquality_service_checks.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when:
+    - ipquality_enabled | bool
+    - ipquality_protected_services | length > 0

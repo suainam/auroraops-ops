@@ -1,0 +1,93 @@
+---
+# IPQuality exit audit. Read-only by design: this role observes an egress and
+# recommends, it never rewrites routing or touches a managed service.
+
+ipquality_enabled: false
+# Off by default: the role needs an explicit opt-in because it makes outbound
+# calls to Google/YouTube and to the upstream scoring databases.
+ipquality_require_residential: false
+ipquality_max_fraud_score: 50
+ipquality_fail_on_violation: true
+
+# Label plus a list of exits to audit. Each exit is either the host's own
+# public egress (`direct: true`) or a whitelisted SOCKS5 pool endpoint.
+#   ipquality_exits:
+#     - name: self
+#       direct: true
+#     - name: jp
+#       country: JP
+#       socks5: {server: jp.example, port: 40002, username: "{{ vault_x }}", password: "{{ vault_y }}"}
+ipquality_exits: []
+ipquality_direct: true
+
+# Read-only run controls.
+ipquality_privacy_mode: true
+ipquality_json_mode: true
+ipquality_language: en
+ipquality_ipv4_only: true
+ipquality_upstream_script_url: "https://raw.githubusercontent.com/xykt/ipquality/main/ip.sh"
+ipquality_upstream_script_sha256: ""
+ipquality_offline: false
+ipquality_offline_payload: ""
+
+# Stage 2 geo-drift probes.
+ipquality_geo_drift_enabled: true
+ipquality_geo_probe_timeout: 20
+
+# Stage 3 remediation context. The role emits recommendations only; the
+# operator (or a higher orchestration layer) decides whether to act.
+ipquality_remediation_reroute_targets: []
+ipquality_sentinel_enabled: false
+ipquality_residential_alternatives_available: false
+
+# Report artifacts. Written only under the report directory.
+ipquality_report_dir: /var/lib/ipquality
+ipquality_report_json: true
+ipquality_report_markdown: true
+
+# Scratch directory for the fetched upstream script and the staged helpers.
+# A plain variable rather than a registered `tempfile` result, because `--check`
+# neither executes `tempfile` nor persists `set_fact`; deriving it here keeps the
+# dry-run preview and the real run on exactly the same path. It is created and
+# removed within the same run, so nothing is left resident on the target.
+ipquality_workdir: "{{ ipquality_report_dir }}/.work"
+
+# Services that must still be healthy after a rollback. The role is read-only, so
+# this is the strongest available proof that it disturbed nothing it does not
+# own. Empty by default because the service manager differs per platform; set it
+# per profile (for example [nginx, sing-box] on an OpenRC NAT guest).
+ipquality_protected_services: []
+
+# Paths rollback must never delete. Note /var and /var/lib are listed even though
+# the default report directory lives under /var/lib: the guard constrains the
+# report directory to a *named* child of /var/lib and rejects these paths only
+# when they are the target itself.
+ipquality_protected_paths:
+  - /bin
+  - /boot
+  - /dev
+  - /etc
+  - /home
+  - /lib
+  - /opt
+  - /proc
+  - /root
+  - /run
+  - /sbin
+  - /srv
+  - /sys
+  - /tmp
+  - /usr
+  - /var
+  - /var/lib
+  - /var/log
+
+# Executes the upstream script and the bundled helpers.
+# Resolved from the interpreter Ansible discovered for this host. The fallback
+# must NOT use the boolean second argument: that would discard a perfectly good
+# discovered path whenever it happened to be falsy, and hardcoding
+# /usr/bin/python3 is wrong on hosts where python3 lives elsewhere (Alpine
+# guests, Homebrew on macOS).
+ipquality_python_interpreter: "{{ ansible_python_interpreter | default('python3') }}"
+
+ipquality_enabled_roles: []

@@ -1,0 +1,70 @@
+---
+# Read-only assertion of a previous audit. This stage must not re-run the
+# probes: it re-reads the stored report so a verify pass is genuinely
+# side-effect free and repeatable.
+
+- name: 读取既有 IP 质量报告
+  ansible.builtin.stat:
+    path: "{{ ipquality_report_dir }}/report.json"
+  register: ipquality_report_stat
+  changed_when: false
+  when: ipquality_enabled | bool
+
+- name: 报告缺失
+  ansible.builtin.debug:
+    msg: >-
+      未找到 {{ ipquality_report_dir }}/report.json；
+      请先运行 deploy/check 阶段生成审计报告。
+  when:
+    - ipquality_enabled | bool
+    - not ipquality_report_stat.stat.exists
+
+- name: 读取报告内容
+  ansible.builtin.slurp:
+    src: "{{ ipquality_report_dir }}/report.json"
+  register: ipquality_report_raw
+  changed_when: false
+  when:
+    - ipquality_enabled | bool
+    - ipquality_report_stat.stat.exists
+  no_log: true
+
+- name: 校验报告结构
+  ansible.builtin.assert:
+    that:
+      - "'results' in (ipquality_report_raw.content | b64decode | from_json)"
+      - "'summary' in (ipquality_report_raw.content | b64decode | from_json)"
+      - (ipquality_report_raw.content | b64decode | from_json).results | length > 0
+    fail_msg: >-
+      {{ ipquality_report_dir }}/report.json 结构不完整，缺少 results/summary
+      或结果为空。
+    quiet: true
+  when:
+    - ipquality_enabled | bool
+    - ipquality_report_stat.stat.exists
+  no_log: true
+
+- name: 复验门禁结论 (基于既有报告, 不重新探测)
+  ansible.builtin.assert:
+    that:
+      - >-
+        (ipquality_report_raw.content | b64decode | from_json).results
+        | map(attribute='passed') | select('equalto', false) | list | length == 0
+    fail_msg: >-
+      复验失败: 以下出口未达标
+      {{ (ipquality_report_raw.content | b64decode | from_json).results
+         | rejectattr('passed') | map(attribute='exit_name') | list }}
+    quiet: true
+  when:
+    - ipquality_enabled | bool
+    - ipquality_report_stat.stat.exists
+    - ipquality_fail_on_violation | bool
+  no_log: true
+
+- name: 输出复验摘要
+  ansible.builtin.debug:
+    msg: >-
+      复验 {{ (ipquality_report_raw.content | b64decode | from_json).summary }}
+  when:
+    - ipquality_enabled | bool
+    - ipquality_report_stat.stat.exists

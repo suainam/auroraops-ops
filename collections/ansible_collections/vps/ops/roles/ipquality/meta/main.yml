@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  author: AuroraOps
+  description: >-
+    Read-only egress IP quality audit. Runs the official xykt/ipquality scoring
+    script, detects Google/YouTube "sent to China" geo drift, and emits ranked
+    remediation recommendations.
+  license: MIT
+  min_ansible_version: "2.14"
+dependencies: []

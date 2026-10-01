@@ -1,0 +1,184 @@
+---
+# Stage 1 (detection): run the official xykt/ipquality scoring script per exit.
+#
+# No persistent artifact is left on the target: the script is fetched to a
+# work directory that is removed at the end of this file, and the bundled
+# helpers are staged there and deleted again by remediate.yml.
+
+# A single deterministic work directory, with no dependency on a registered
+# tempfile result. Two separate defects forced this shape:
+#   * `--check` does not execute `tempfile`, so referencing its registered
+#     result aborted the dry-run preview with an undefined-variable error.
+#   * `--check` does not persist `set_fact` either, so a workdir computed in a
+#     fact stayed invisible to the following `get_url`, which then failed with
+#     "Destination ... does not exist".
+# Deriving the path from a variable makes every stage agree, in check mode and
+# in a real run alike.
+- name: 确保临时工作目录存在
+  ansible.builtin.file:
+    path: "{{ ipquality_workdir }}"
+    state: directory
+    mode: "0700"
+  when:
+    - ipquality_enabled | bool
+    - not (ipquality_offline | bool)
+  changed_when: false
+
+- name: 拉取官方 ipquality 脚本 (只读上游评分逻辑)
+  ansible.builtin.get_url:
+    url: "{{ ipquality_upstream_script_url }}"
+    dest: "{{ ipquality_workdir }}/ipquality.sh"
+    mode: "0700"
+    timeout: 60
+  when:
+    - ipquality_enabled | bool
+    - not (ipquality_offline | bool)
+    # In `--check` the `file` task above does not actually create the work
+    # directory, so `get_url` fails with "Destination does not exist" and takes
+    # the whole dry-run preview down. The parent directory of a not-yet-created
+    # file is purely a preview concern, so the download is skipped there instead
+    # of forcing a write during a read-only stage.
+    - not ansible_check_mode
+  changed_when: false
+  no_log: true
+
+- name: 预览模式下说明脚本不会被下载
+  ansible.builtin.debug:
+    msg: >-
+      check 模式：跳过下载 {{ ipquality_upstream_script_url }}
+      （预览阶段不写入目标机；真实部署会下载并校验指纹）
+  when:
+    - ipquality_enabled | bool
+    - not (ipquality_offline | bool)
+    - ansible_check_mode
+  changed_when: false
+  tags: [deploy, verify, ops, ipquality, phase6]
+
+- name: 校验官方脚本指纹 (防上游被替换)
+  ansible.builtin.stat:
+    path: "{{ ipquality_workdir }}/ipquality.sh"
+    checksum_algorithm: sha256
+  register: ipquality_script_stat
+  when:
+    - ipquality_enabled | bool
+    - not (ipquality_offline | bool)
+    - not ansible_check_mode
+    - ipquality_upstream_script_sha256 | length > 0
+  changed_when: false
+
+- name: 官方脚本指纹不符时中止
+  ansible.builtin.assert:
+    that:
+      - ipquality_script_stat.stat.checksum == ipquality_upstream_script_sha256
+    fail_msg: >-
+      ipquality.sh 指纹不匹配 (期望 {{ ipquality_upstream_script_sha256 }},
+      实际 {{ ipquality_script_stat.stat.checksum }})。上游已被替换或传输被篡改。
+    quiet: true
+  when:
+    - ipquality_enabled | bool
+    - not (ipquality_offline | bool)
+    - not ansible_check_mode
+    - ipquality_upstream_script_sha256 | length > 0
+
+# `role_path` is a path on the Ansible controller, not on the target, so a
+# remote task cannot execute a helper from it. The helpers are therefore staged
+# into the work directory with `copy` (which does transfer over SSH) and removed
+# again at the end of this file, so nothing resident is left behind.
+- name: 将检测助手暂存到目标机
+  ansible.builtin.copy:
+    src: ipquality_run_exit.py
+    dest: "{{ ipquality_workdir }}/ipquality_run_exit.py"
+    mode: "0700"
+  when:
+    - ipquality_enabled | bool
+    - not (ipquality_offline | bool)
+    - not ansible_check_mode
+  changed_when: false
+
+- name: 为每个出口执行官方检测
+  ansible.builtin.command:
+    # Invoked through the interpreter so the mode bit never matters. The
+    # observation goes to a file rather than stdout because the upstream report
+    # is large and full of escape sequences.
+    argv:
+      - "{{ ipquality_python_interpreter }}"
+      - "{{ ipquality_workdir }}/ipquality_run_exit.py"
+      - "{{ item.name | default('exit') | regex_replace('[^A-Za-z0-9_.-]', '_') }}"
+      - "{{ ipquality_report_dir }}/observations/{{ item.name | default('exit') | regex_replace('[^A-Za-z0-9_.-]', '_') }}.json"
+  environment:
+    IPQUALITY_SOCKS5_SERVER: "{{ item.socks5.server | default('') }}"
+    IPQUALITY_SOCKS5_PORT: "{{ item.socks5.port | default('') }}"
+    IPQUALITY_SOCKS5_USER: "{{ item.socks5.username | default('') }}"
+    IPQUALITY_SOCKS5_PASS: "{{ item.socks5.password | default('') }}"
+    IPQUALITY_SCRIPT: "{{ ipquality_workdir }}/ipquality.sh"
+    # Parenthesised so `join` applies to the whole list; without the
+    # parentheses Jinja binds the filter to the final term only and the
+    # concatenation fails with "can only concatenate list (not str)".
+    IPQUALITY_SCRIPT_ARGS: >-
+      {{ (['-j']
+          + (['-p'] if ipquality_privacy_mode | bool else [])
+          + (['-n'] if not ipquality_offline | bool else [])
+          + (['-4'] if ipquality_ipv4_only | bool else [])
+          + (['-E'] if ipquality_language == 'en' else ['-l', ipquality_language]))
+         | join(' ') }}
+    IPQUALITY_OFFLINE_PAYLOAD: "{{ ipquality_offline_payload | default('') }}"
+    # An ambient proxy would silently hijack the exit-IP lookup and misreport
+    # this host's own address as the measured exit.
+    http_proxy: ""
+    https_proxy: ""
+    all_proxy: ""
+    HTTP_PROXY: ""
+    HTTPS_PROXY: ""
+    ALL_PROXY: ""
+  register: ipquality_raw_runs
+  changed_when: false
+  failed_when: false
+  loop: "{{ ipquality_exits }}"
+  loop_control:
+    label: "{{ item.name | default('unnamed') }}"
+  no_log: true
+  # Nothing was staged during a preview, so there is nothing to execute. This
+  # is what makes the idempotence gate -- a repeated `--check` -- report
+  # changed=0 instead of failing on a missing helper.
+  when:
+    - ipquality_enabled | bool
+    - not ansible_check_mode
+
+- name: 校验每个出口的观测文件均已生成
+  ansible.builtin.stat:
+    path: "{{ ipquality_report_dir }}/observations/{{ item.name | default('exit') | regex_replace('[^A-Za-z0-9_.-]', '_') }}.json"
+  register: ipquality_observation_files
+  changed_when: false
+  loop: "{{ ipquality_exits }}"
+  loop_control:
+    label: "{{ item.name | default('unnamed') }}"
+  when:
+    - ipquality_enabled | bool
+    - not ansible_check_mode
+
+- name: 观测文件缺失时中止 (否则报告会静默为空)
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+    fail_msg: >-
+      出口 {{ item.item.name | default('exit') }} 未生成观测文件，检测阶段未完成。
+    quiet: true
+  loop: "{{ ipquality_observation_files.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name | default('exit') }}"
+  when:
+    - ipquality_enabled | bool
+    - not ansible_check_mode
+
+# Zero-pollution: the fetched upstream script and its temp directory are removed
+# once the observations exist, so a read-only audit leaves nothing resident on the
+# target. The report and observations under ipquality_report_dir are the only
+# durable output.
+- name: 清理本次审计的临时工作目录
+  ansible.builtin.file:
+    path: "{{ ipquality_workdir }}"
+    state: absent
+  when:
+    - ipquality_enabled | bool
+    - not (ipquality_offline | bool)
+  changed_when: false

@@ -61,8 +61,15 @@ STRATEGY_REROUTE = "reroute_fixed_clean_egress"
 STRATEGY_SENTINEL = "ip_sentinel_upstream_appeal"
 STRATEGY_REPLACE = "warp_or_residential_replacement"
 STRATEGY_NONE = "none_required"
+# Findings exist but the inventory offered no lever to act on. This must never
+# collapse into STRATEGY_NONE: that value means "exit passed both checks", and
+# reporting it for a failing exit tells the operator to do nothing about a
+# measured problem. Measured on nat-hk216, where geo drift was positive while
+# reroute_targets/sentinel/residential were all unset.
+STRATEGY_UNDECIDED = "findings_no_remediation_context"
 
-STRATEGY_ORDER = (STRATEGY_REROUTE, STRATEGY_SENTINEL, STRATEGY_REPLACE, STRATEGY_NONE)
+STRATEGY_ORDER = (STRATEGY_REROUTE, STRATEGY_SENTINEL, STRATEGY_REPLACE,
+                  STRATEGY_UNDECIDED, STRATEGY_NONE)
 
 
 def _text(value: Any) -> str:
@@ -346,8 +353,26 @@ def build_remediation(detection: dict[str, Any], drift: dict[str, Any],
         })
 
     ordered = sorted(actions, key=lambda item: item["rank"])
+    # Findings without any configured lever is its own state, not "nothing to
+    # do". Reporting STRATEGY_NONE here would make a failing exit read as a
+    # passing one, which is exactly the false-negative this role must not emit.
+    if not ordered:
+        return {
+            "remediation_strategy": STRATEGY_UNDECIDED,
+            "reasons": reasons,
+            "actions": [],
+            "requires_operator_decision": True,
+            "note": (
+                "advisory only; this role never rewrites routing. Findings were "
+                "measured but the inventory supplied no remediation lever "
+                "(reroute targets, IP-Sentinel, residential alternatives all "
+                "unset), so no strategy could be ranked -- supply that context "
+                "to get an actionable recommendation."
+            ),
+        }
+
     return {
-        "remediation_strategy": ordered[0]["strategy"] if ordered else STRATEGY_NONE,
+        "remediation_strategy": ordered[0]["strategy"],
         "reasons": reasons,
         "actions": ordered,
         "requires_operator_decision": True,

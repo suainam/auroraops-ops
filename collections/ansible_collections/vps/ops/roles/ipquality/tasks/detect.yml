@@ -24,6 +24,20 @@
   when: not (ipquality_offline | bool)
   changed_when: false
 
+# The deterministic fallback is a real path, so it must exist before get_url
+# writes into it. Created unconditionally under the report directory, and
+# removed again at the end of this file, so nothing resident is left behind.
+- name: 确保临时工作目录存在
+  ansible.builtin.file:
+    path: "{{ ipquality_workdir | default('', true) }}"
+    state: directory
+    mode: "0700"
+  when:
+    - ipquality_enabled | bool
+    - not (ipquality_offline | bool)
+    - ipquality_workdir | default('', true) | length > 0
+  changed_when: false
+
 - name: 拉取官方 ipquality 脚本 (只读上游评分逻辑)
   ansible.builtin.get_url:
     url: "{{ ipquality_upstream_script_url }}"

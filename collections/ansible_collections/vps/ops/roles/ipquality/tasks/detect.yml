@@ -69,16 +69,29 @@
     - not (ipquality_offline | bool)
     - ipquality_upstream_script_sha256 | length > 0
 
+# `role_path` is a path on the Ansible controller, not on the target, so a
+# remote task cannot execute a helper from it. The helpers are therefore staged
+# into the report directory with `copy` (which does transfer over SSH) and
+# removed again at the end of this file, so nothing resident is left behind.
+- name: 将检测助手暂存到目标机
+  ansible.builtin.copy:
+    src: ipquality_run_exit.py
+    dest: "{{ ipquality_workdir }}/ipquality_run_exit.py"
+    mode: "0700"
+  when:
+    - ipquality_enabled | bool
+    - not (ipquality_offline | bool)
+    - ipquality_workdir | default('', true) | length > 0
+  changed_when: false
+
 - name: 为每个出口执行官方检测
   ansible.builtin.command:
-    # `command` rather than `script`: the module stages a file on the target,
-    # which is exactly what this role must not do, and it also misreads a bare
-    # string as a path. The helper is invoked through the interpreter so its
-    # mode bit never matters. The observation goes to a file rather than stdout
-    # because the upstream report is large and full of escape sequences.
+    # Invoked through the interpreter so the mode bit never matters. The
+    # observation goes to a file rather than stdout because the upstream report
+    # is large and full of escape sequences.
     argv:
       - "{{ ipquality_python_interpreter }}"
-      - "{{ role_path }}/files/ipquality_run_exit.py"
+      - "{{ ipquality_workdir }}/ipquality_run_exit.py"
       - "{{ item.name | default('exit') | regex_replace('[^A-Za-z0-9_.-]', '_') }}"
       - "{{ ipquality_report_dir }}/observations/{{ item.name | default('exit') | regex_replace('[^A-Za-z0-9_.-]', '_') }}.json"
   environment:

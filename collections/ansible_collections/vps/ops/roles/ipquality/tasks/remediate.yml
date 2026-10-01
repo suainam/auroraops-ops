@@ -18,12 +18,31 @@
   when: ipquality_enabled | bool
   no_log: true
 
+# `role_path` is controller-side; the pipeline and the analyzer it imports must
+# both be staged onto the target, or the import fails at runtime.
+# The staged names deliberately keep the original module basenames: the pipeline
+# does `from ipquality_analyzer import ...`, so renaming either file breaks it.
+- name: 将判定引擎暂存到目标机
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ ipquality_report_dir }}/{{ item }}"
+    mode: "0700"
+  loop:
+    - ipquality_pipeline.py
+    - ipquality_analyzer.py
+  when: ipquality_enabled | bool
+  changed_when: false
+
 - name: 执行检测 + 送中判定 + 治理建议
   ansible.builtin.command:
+    # PYTHONPATH points at the report directory so the pipeline can import the
+    # staged analyzer module.
     argv:
       - "{{ ipquality_python_interpreter }}"
-      - "{{ role_path }}/files/ipquality_pipeline.py"
+      - "{{ ipquality_report_dir }}/ipquality_pipeline.py"
     stdin: "{{ ipquality_request | to_nice_json }}"
+  environment:
+    PYTHONPATH: "{{ ipquality_report_dir }}"
   register: ipquality_verdict
   changed_when: false
   when: ipquality_enabled | bool
@@ -62,6 +81,19 @@
   loop_control:
     label: "{{ item.exit_name }}"
   when: ipquality_enabled | bool
+
+# Zero-pollution: the staged helpers are removed once the verdict exists, so the
+# only durable output is report.json, report.json.md and observations/.
+- name: 清理暂存的判定引擎 (报告与观测数据保留)
+  ansible.builtin.file:
+    path: "{{ ipquality_report_dir }}/{{ item }}"
+    state: absent
+  loop:
+    - ipquality_pipeline.py
+    - ipquality_analyzer.py
+    - ipquality_geo_probe.py
+  when: ipquality_enabled | bool
+  changed_when: false
 
 - name: 断言阈值 (fail-loud)
   ansible.builtin.assert:

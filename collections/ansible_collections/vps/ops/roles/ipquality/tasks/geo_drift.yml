@@ -10,12 +10,20 @@
 # SOCKS support the probe reports that explicitly rather than falling back to a
 # direct request, which would silently measure the wrong egress.
 
+# `role_path` is controller-side; the probe must be staged onto the target.
+- name: 将送中探针暂存到目标机
+  ansible.builtin.copy:
+    src: ipquality_geo_probe.py
+    dest: "{{ ipquality_report_dir }}/ipquality_geo_probe.py"
+    mode: "0700"
+  when: ipquality_enabled | bool
+  changed_when: false
+
 - name: 探测每个出口的 Google / YouTube 地域判定
   ansible.builtin.command:
-    # `command` rather than `script`; see the note in detect.yml.
     argv:
       - "{{ ipquality_python_interpreter }}"
-      - "{{ role_path }}/files/ipquality_geo_probe.py"
+      - "{{ ipquality_report_dir }}/ipquality_geo_probe.py"
   environment:
     IPQUALITY_SOCKS5_URL: >-
       {{ (item.socks5.server ~ ':' ~ item.socks5.port ~ '/'

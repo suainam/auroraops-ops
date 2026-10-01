@@ -1,0 +1,36 @@
+---
+# Rollback removes only what this role created: the report directory. It never
+# touches a managed service, a proxy configuration, or a credential file,
+# because the role creates none of those.
+#
+# The guard rejects catastrophic values rather than pinning one exact path, so an
+# operator may relocate the report directory while a misconfiguration still
+# cannot delete a system tree. Every protected path is compared for exact match
+# and for "/" -prefixed containment, so "/etc", "/etc/ssh" and "/etcfoo" are all
+# refused.
+
+- name: 校验报告目录可被安全回滚
+  ansible.builtin.assert:
+    that:
+      - ipquality_report_dir is defined
+      - ipquality_report_dir | length > 0
+      # Absolute, and exactly one level below /var/lib, so neither a relative
+      # path nor a traversal such as "/var/lib/../etc" can reach another tree.
+      - ipquality_report_dir is match('^/var/lib/[^/]+$')
+      # Refuse the report directory itself when it is a protected path. The
+      # default /var/lib/ipquality is intentionally NOT protected, while
+      # /etc, /var/log and /var/lib are. Containment is already covered by the
+      # single-level regex above, so a per-path loop is unnecessary here.
+      - ipquality_report_dir not in ipquality_protected_paths
+    fail_msg: >-
+      拒绝回滚: 报告目录 {{ ipquality_report_dir | default('undefined') }} 不在允许的
+      清理范围内 (必须是 /var/lib/ 下的独立子目录)。本角色是只读审计，不会删除其他路径。
+    quiet: true
+  when: ipquality_enabled | bool
+  no_log: true
+
+- name: 删除本角色生成的报告目录
+  ansible.builtin.file:
+    path: "{{ ipquality_report_dir }}"
+    state: absent
+  when: ipquality_enabled | bool

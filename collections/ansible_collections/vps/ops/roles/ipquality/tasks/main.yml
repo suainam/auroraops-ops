@@ -1,0 +1,86 @@
+---
+# Entry point for the read-only exit audit.
+#
+# Every task either observes the egress or writes a report under
+# ipquality_report_dir. None of them manage a service or change routing: the
+# role's remediation output is advisory by design.
+
+- name: 校验 ipquality 角色配置
+  ansible.builtin.assert:
+    that:
+      - ipquality_exits is sequence
+      - ipquality_exits is not string
+      - ipquality_max_fraud_score is number
+      - ipquality_max_fraud_score >= 0
+      - ipquality_max_fraud_score <= 100
+    fail_msg: >-
+      ipquality_exits 必须是列表，ipquality_max_fraud_score 必须是 0-100 的数值。
+    quiet: true
+  when: ipquality_enabled | bool
+  tags: [deploy, verify, ops, ipquality, phase6]
+
+- name: 校验每个出口的凭据字段齐备 (仅校验字段存在, 不读取取值)
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.direct | default(false) | bool
+        or (item.socks5 is defined
+            and item.socks5.server | default('') | length > 0
+            and item.socks5.port | default(0) | int > 0
+            and item.socks5.username is defined)
+    fail_msg: >-
+      出口 {{ item.name | default('unnamed') }} 需要 socks5.server/port/username，
+      或显式声明 direct: true。
+    quiet: true
+  loop: "{{ ipquality_exits }}"
+  loop_control:
+    label: "{{ item.name | default('unnamed') }}"
+  when: ipquality_enabled | bool
+  no_log: true
+  tags: [deploy, verify, ops, ipquality, phase6]
+
+- name: 确认 Python 解释器可用
+  ansible.builtin.command:
+    argv: ["{{ ipquality_python_interpreter }}", "-c", "import json"]
+  register: ipquality_python_check
+  changed_when: false
+  failed_when: ipquality_python_check.rc != 0
+  when: ipquality_enabled | bool
+  tags: [deploy, verify, ops, ipquality, phase6]
+
+- name: 确保报告目录存在
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0700"
+  loop:
+    - "{{ ipquality_report_dir }}/exits"
+    - "{{ ipquality_report_dir }}/observations"
+  when: ipquality_enabled | bool
+  tags: [deploy, verify, ops, ipquality, phase6]
+
+# The helper scripts are executed from the role's own files/ directory through
+# `script`, which stages them in a temp dir and removes them afterwards. No
+# permanent installation, so the target keeps no resident state from an audit.
+- name: 第一段 检测 — 执行官方 xykt/ipquality 评分脚本
+  ansible.builtin.include_tasks: detect.yml
+  when: ipquality_enabled | bool
+  tags: [deploy, verify, ops, ipquality, phase6]
+
+- name: 第二段 送中判定 — 探测 Google / YouTube Premium 地域判定
+  ansible.builtin.include_tasks: geo_drift.yml
+  when:
+    - ipquality_enabled | bool
+    - ipquality_geo_drift_enabled | bool
+  tags: [deploy, verify, ops, ipquality, phase6]
+
+- name: 第三段 治理闭环 — 生成结构化建议与报告并断言
+  ansible.builtin.include_tasks: remediate.yml
+  when: ipquality_enabled | bool
+  tags: [deploy, verify, ops, ipquality, phase6]
+
+- name: 角色未启用
+  ansible.builtin.debug:
+    msg: Role ipquality is disabled, skipping
+  when: not (ipquality_enabled | bool)
+  tags: [deploy, verify, ops, ipquality, phase6]

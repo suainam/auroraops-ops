@@ -1,0 +1,64 @@
+---
+# Stage 2 (geo-drift): does Google or YouTube classify this exit as China?
+#
+# This is the #101 signal. A US or JP address whose YouTube Premium page is
+# served as China, or that Google answers with the /sorry/ interstitial, is
+# "sent to China" and breaks regional expectations downstream.
+#
+# The probe runs on the measured host, so a direct exit is measured locally and
+# a SOCKS5 exit is measured through that exit. When the interpreter has no
+# SOCKS support the probe reports that explicitly rather than falling back to a
+# direct request, which would silently measure the wrong egress.
+
+- name: 探测每个出口的 Google / YouTube 地域判定
+  ansible.builtin.command:
+    # `command` rather than `script`; see the note in detect.yml.
+    argv:
+      - "{{ ipquality_python_interpreter }}"
+      - "{{ role_path }}/files/ipquality_geo_probe.py"
+  environment:
+    IPQUALITY_SOCKS5_URL: >-
+      {{ (item.socks5.server ~ ':' ~ item.socks5.port ~ '/'
+          ~ (item.socks5.username | default('')) ~ ':'
+          ~ (item.socks5.password | default('')))
+         if (item.socks5 is defined and not (item.direct | default(false) | bool))
+         else '' }}
+    http_proxy: ""
+    https_proxy: ""
+    all_proxy: ""
+    HTTP_PROXY: ""
+    HTTPS_PROXY: ""
+    ALL_PROXY: ""
+  register: ipquality_geo_runs
+  changed_when: false
+  failed_when: false
+  loop: "{{ ipquality_exits }}"
+  loop_control:
+    label: "{{ item.name | default('unnamed') }}"
+  no_log: true
+  when: ipquality_enabled | bool
+
+- name: 汇总送中探针结果
+  ansible.builtin.set_fact:
+    ipquality_geo_probes: >-
+      {{ (ipquality_geo_probes | default({}))
+         | combine({ item.0.name | default('exit'):
+                     ((item.1.stdout | default('') | from_json)
+                      if (item.1.stdout | default('') | length > 0)
+                      else {'youtube': {'status': 'unknown', 'sent_to_china': False,
+                                        'reason': 'geo probe produced no output'},
+                            'google': {'status': 'unknown', 'sent_to_china': False,
+                                       'reason': 'geo probe produced no output'}}) }) }}
+  loop: "{{ ipquality_exits | zip(ipquality_geo_runs.results | default([])) | list }}"
+  loop_control:
+    label: "{{ item.0.name | default('unnamed') }}"
+  when: ipquality_enabled | bool
+  no_log: true
+
+- name: 报告送中判定摘要
+  ansible.builtin.debug:
+    msg: >-
+      {{ (ipquality_geo_probes | default({})) | dict2items
+         | map(attribute='value') | map(attribute='youtube.status') | list }}
+    verbosity: 1
+  when: ipquality_enabled | bool

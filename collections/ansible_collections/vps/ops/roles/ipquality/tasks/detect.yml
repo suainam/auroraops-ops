@@ -33,8 +33,26 @@
   when:
     - ipquality_enabled | bool
     - not (ipquality_offline | bool)
+    # In `--check` the `file` task above does not actually create the work
+    # directory, so `get_url` fails with "Destination does not exist" and takes
+    # the whole dry-run preview down. The parent directory of a not-yet-created
+    # file is purely a preview concern, so the download is skipped there instead
+    # of forcing a write during a read-only stage.
+    - not ansible_check_mode
   changed_when: false
   no_log: true
+
+- name: 预览模式下说明脚本不会被下载
+  ansible.builtin.debug:
+    msg: >-
+      check 模式：跳过下载 {{ ipquality_upstream_script_url }}
+      （预览阶段不写入目标机；真实部署会下载并校验指纹）
+  when:
+    - ipquality_enabled | bool
+    - not (ipquality_offline | bool)
+    - ansible_check_mode
+  changed_when: false
+  tags: [deploy, verify, ops, ipquality, phase6]
 
 - name: 校验官方脚本指纹 (防上游被替换)
   ansible.builtin.stat:
@@ -44,6 +62,7 @@
   when:
     - ipquality_enabled | bool
     - not (ipquality_offline | bool)
+    - not ansible_check_mode
     - ipquality_upstream_script_sha256 | length > 0
   changed_when: false
 
@@ -56,13 +75,15 @@
       实际 {{ ipquality_script_stat.stat.checksum }})。上游已被替换或传输被篡改。
     quiet: true
   when:
+    - ipquality_enabled | bool
     - not (ipquality_offline | bool)
+    - not ansible_check_mode
     - ipquality_upstream_script_sha256 | length > 0
 
 # `role_path` is a path on the Ansible controller, not on the target, so a
 # remote task cannot execute a helper from it. The helpers are therefore staged
-# into the report directory with `copy` (which does transfer over SSH) and
-# removed again at the end of this file, so nothing resident is left behind.
+# into the work directory with `copy` (which does transfer over SSH) and removed
+# again at the end of this file, so nothing resident is left behind.
 - name: 将检测助手暂存到目标机
   ansible.builtin.copy:
     src: ipquality_run_exit.py
@@ -71,6 +92,7 @@
   when:
     - ipquality_enabled | bool
     - not (ipquality_offline | bool)
+    - not ansible_check_mode
   changed_when: false
 
 - name: 为每个出口执行官方检测
@@ -115,7 +137,12 @@
   loop_control:
     label: "{{ item.name | default('unnamed') }}"
   no_log: true
-  when: ipquality_enabled | bool
+  # Nothing was staged during a preview, so there is nothing to execute. This
+  # is what makes the idempotence gate -- a repeated `--check` -- report
+  # changed=0 instead of failing on a missing helper.
+  when:
+    - ipquality_enabled | bool
+    - not ansible_check_mode
 
 - name: 校验每个出口的观测文件均已生成
   ansible.builtin.stat:
@@ -125,7 +152,9 @@
   loop: "{{ ipquality_exits }}"
   loop_control:
     label: "{{ item.name | default('unnamed') }}"
-  when: ipquality_enabled | bool
+  when:
+    - ipquality_enabled | bool
+    - not ansible_check_mode
 
 - name: 观测文件缺失时中止 (否则报告会静默为空)
   ansible.builtin.assert:
@@ -137,7 +166,9 @@
   loop: "{{ ipquality_observation_files.results | default([]) }}"
   loop_control:
     label: "{{ item.item.name | default('exit') }}"
-  when: ipquality_enabled | bool
+  when:
+    - ipquality_enabled | bool
+    - not ansible_check_mode
 
 # Zero-pollution: the fetched upstream script and its temp directory are removed
 # once the observations exist, so a read-only audit leaves nothing resident on the

@@ -16,7 +16,9 @@
     src: ipquality_geo_probe.py
     dest: "{{ ipquality_report_dir }}/ipquality_geo_probe.py"
     mode: "0700"
-  when: ipquality_enabled | bool
+  when:
+    - ipquality_enabled | bool
+    - not ansible_check_mode
   changed_when: false
 
 - name: 探测每个出口的 Google / YouTube 地域判定
@@ -44,7 +46,10 @@
   loop_control:
     label: "{{ item.name | default('unnamed') }}"
   no_log: true
-  when: ipquality_enabled | bool
+  # The probe was not staged during a preview, so there is nothing to run.
+  when:
+    - ipquality_enabled | bool
+    - not ansible_check_mode
 
 - name: 汇总送中探针结果
   ansible.builtin.set_fact:
@@ -60,7 +65,9 @@
   loop: "{{ ipquality_exits | zip(ipquality_geo_runs.results | default([])) | list }}"
   loop_control:
     label: "{{ item.0.name | default('unnamed') }}"
-  when: ipquality_enabled | bool
+  when:
+    - ipquality_enabled | bool
+    - not ansible_check_mode
   no_log: true
 
 - name: 报告送中判定摘要
@@ -69,4 +76,6 @@
       {{ (ipquality_geo_probes | default({})) | dict2items
          | map(attribute='value') | map(attribute='youtube.status') | list }}
     verbosity: 1
-  when: ipquality_enabled | bool
+  when:
+    - ipquality_enabled | bool
+    - not ansible_check_mode

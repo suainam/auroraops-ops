@@ -30,7 +30,9 @@
   loop:
     - ipquality_pipeline.py
     - ipquality_analyzer.py
-  when: ipquality_enabled | bool
+  when:
+    - ipquality_enabled | bool
+    - not ansible_check_mode
   changed_when: false
 
 - name: 执行检测 + 送中判定 + 治理建议
@@ -51,7 +53,10 @@
     PYTHONDONTWRITEBYTECODE: "1"
   register: ipquality_verdict
   changed_when: false
-  when: ipquality_enabled | bool
+  # The engine was not staged during a preview, so there is nothing to run.
+  when:
+    - ipquality_enabled | bool
+    - not ansible_check_mode
   no_log: true
 
 - name: 落地结构化 JSON 报告
@@ -61,6 +66,7 @@
     mode: "0600"
   when:
     - ipquality_enabled | bool
+    - not ansible_check_mode
     - ipquality_report_json | bool
   no_log: true
 
@@ -71,6 +77,7 @@
     mode: "0600"
   when:
     - ipquality_enabled | bool
+    - not ansible_check_mode
     - ipquality_report_markdown | bool
   no_log: true
 
@@ -83,10 +90,12 @@
       geo={{ item.drift.verdict | default('unknown') }}
       strategy={{ item.remediation.remediation_strategy | default('none_required') }}
       passed={{ item.passed }}
-  loop: "{{ (ipquality_verdict.stdout | from_json).results | default([]) }}"
+  loop: "{{ (ipquality_verdict.stdout | default('{}') | from_json).results | default([]) }}"
   loop_control:
     label: "{{ item.exit_name }}"
-  when: ipquality_enabled | bool
+  when:
+    - ipquality_enabled | bool
+    - not ansible_check_mode
 
 # Zero-pollution: the staged helpers are removed once the verdict exists, so the
 # only durable output is report.json, report.json.md and observations/.
@@ -101,7 +110,9 @@
     - ipquality_analyzer.py
     - ipquality_geo_probe.py
     - __pycache__
-  when: ipquality_enabled | bool
+  when:
+    - ipquality_enabled | bool
+    - not ansible_check_mode
   changed_when: false
 
 - name: 断言阈值 (fail-loud)
@@ -119,5 +130,6 @@
     quiet: true
   when:
     - ipquality_enabled | bool
+    - not ansible_check_mode
     - ipquality_fail_on_violation | bool
   no_log: true

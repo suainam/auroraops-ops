@@ -9,23 +9,33 @@
   ansible.builtin.tempfile:
     state: directory
     suffix: ipquality
-  register: ipquality_workdir
+  register: ipquality_tempdir
+  when: not (ipquality_offline | bool)
+  changed_when: false
+
+# A deterministic `ipquality_workdir`, not `ipquality_tempdir.path`.
+# `--check` does not execute the tempfile task, so any later reference to that
+# registered result is an undefined-variable error that aborts the dry-run
+# preview. The boolean form of `default` also covers the offline case, where the
+# tempfile task is skipped entirely.
+- name: 设定本次审计的临时工作目录
+  ansible.builtin.set_fact:
+    ipquality_workdir: "{{ ipquality_tempdir.path | default(ipquality_report_dir ~ '/.work', true) }}"
   when: not (ipquality_offline | bool)
   changed_when: false
 
 - name: 拉取官方 ipquality 脚本 (只读上游评分逻辑)
   ansible.builtin.get_url:
     url: "{{ ipquality_upstream_script_url }}"
-    dest: "{{ ipquality_workdir.path }}/ipquality.sh"
+    dest: "{{ ipquality_workdir }}/ipquality.sh"
     mode: "0700"
     timeout: 60
   when: not (ipquality_offline | bool)
   changed_when: false
-  no_log: true
 
 - name: 校验官方脚本指纹 (防上游被替换)
   ansible.builtin.stat:
-    path: "{{ ipquality_workdir.path }}/ipquality.sh"
+    path: "{{ ipquality_workdir }}/ipquality.sh"
     checksum_algorithm: sha256
   register: ipquality_script_stat
   when:
@@ -62,12 +72,9 @@
     IPQUALITY_SOCKS5_PORT: "{{ item.socks5.port | default('') }}"
     IPQUALITY_SOCKS5_USER: "{{ item.socks5.username | default('') }}"
     IPQUALITY_SOCKS5_PASS: "{{ item.socks5.password | default('') }}"
-    # In offline mode the temp-dir task is skipped, so `ipquality_workdir` is
-    # undefined. `default('')` alone does NOT help here: the failure is on the
-    # `.path` attribute of an undefined dict, and Jinja stringifies the
-    # undefined object instead of substituting the default. The second `true`
-    # argument makes the default apply to falsy/undefined attribute chains.
-    IPQUALITY_SCRIPT: "{{ (ipquality_workdir.path | default('', true)) ~ '/ipquality.sh' }}"
+    # `ipquality_workdir` is now a plain string, so no attribute access is
+    # involved. The boolean `default` covers the offline and `--check` cases.
+    IPQUALITY_SCRIPT: "{{ (ipquality_workdir | default('', true)) ~ '/ipquality.sh' }}"
     # Parenthesised so `join` applies to the whole list; without the
     # parentheses Jinja binds the filter to the final term only and the
     # concatenation fails with "can only concatenate list (not str)".
@@ -117,3 +124,17 @@
   loop_control:
     label: "{{ item.item.name | default('exit') }}"
   when: ipquality_enabled | bool
+
+# Zero-pollution: the fetched upstream script and its temp directory are removed
+# once the observations exist, so a read-only audit leaves nothing resident on the
+# target. The report and observations under ipquality_report_dir are the only
+# durable output.
+- name: 清理本次审计的临时工作目录
+  ansible.builtin.file:
+    path: "{{ ipquality_workdir | default('', true) }}"
+    state: absent
+  when:
+    - ipquality_enabled | bool
+    - not (ipquality_offline | bool)
+    - ipquality_workdir | default('', true) | length > 0
+  changed_when: false

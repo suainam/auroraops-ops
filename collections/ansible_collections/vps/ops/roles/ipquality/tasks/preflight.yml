@@ -1,0 +1,88 @@
+---
+# Stage 1 (preflight): read-only. Verifies the host can actually run this audit
+# and reports every missing prerequisite at once, so an operator learns what is
+# wrong before the deploy stage rather than during it.
+#
+# Nothing here writes, installs, or restarts anything.
+
+- name: 确认审计所需的可执行文件存在
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: ipquality_preflight_bins
+  changed_when: false
+  loop:
+    - "{{ ipquality_python_interpreter }}"
+    - /usr/bin/curl
+  loop_control:
+    label: "{{ item }}"
+  when: ipquality_enabled | bool
+  tags: [preflight, ops, ipquality, phase6]
+
+- name: 汇总缺失的可执行文件
+  ansible.builtin.set_fact:
+    ipquality_missing_bins: >-
+      {{ ipquality_preflight_bins.results | default([])
+         | rejectattr('stat.exists') | map(attribute='item') | list }}
+  when: ipquality_enabled | bool
+  changed_when: false
+  tags: [preflight, ops, ipquality, phase6]
+
+# jq is a hard requirement of the upstream xykt/ipquality script: it parses every
+# database response with `jq`. Its absence is reported rather than silently
+# producing an empty report, because a missing parser upstream looks exactly
+# like "no risk data found".
+- name: 检测上游评分脚本所需的 jq
+  ansible.builtin.stat:
+    path: /usr/bin/jq
+  register: ipquality_jq
+  changed_when: false
+  when: ipquality_enabled | bool
+  tags: [preflight, ops, ipquality, phase6]
+
+# The report directory's parent must be writable, otherwise every later stage
+# fails at the write rather than at the check that could have predicted it.
+- name: 确认报告目录可写
+  ansible.builtin.stat:
+    path: "{{ ipquality_report_dir | dirname }}"
+  register: ipquality_report_parent
+  changed_when: false
+  when: ipquality_enabled | bool
+  tags: [preflight, ops, ipquality, phase6]
+
+- name: 汇总 preflight 结论
+  ansible.builtin.debug:
+    msg:
+      - "host: {{ inventory_hostname }}"
+      - "python: {{ ipquality_python_interpreter }}"
+      - "missing executables: {{ ipquality_missing_bins | default([]) | join(', ') | default('none', true) }}"
+      - "jq (required by upstream ipquality): {{ 'present' if ipquality_jq.stat.exists | default(false) else 'MISSING' }}"
+      - "report parent {{ ipquality_report_parent.stat.path | default('?') }} exists: {{ ipquality_report_parent.stat.exists | default(false) }}"
+      - "network egress: required (Google/YouTube + scoring databases)"
+  when: ipquality_enabled | bool
+  changed_when: false
+  tags: [preflight, ops, ipquality, phase6]
+
+- name: 缺少可执行文件时中止
+  ansible.builtin.assert:
+    that:
+      - ipquality_missing_bins | default([]) | length == 0
+    fail_msg: >-
+      缺少必要可执行文件: {{ ipquality_missing_bins | join(', ') }}。
+      本角色只读，不会自行安装依赖。
+    quiet: true
+  when: ipquality_enabled | bool
+  tags: [preflight, ops, ipquality, phase6]
+
+# Deliberately a warning, not a failure: the geo-drift stage is pure stdlib and
+# still works, so refusing the whole role over jq would be a false negative.
+- name: 提示上游评分脚本将不可用
+  ansible.builtin.debug:
+    msg: >-
+      警告: 本机缺少 jq，上游 xykt/ipquality 评分脚本无法解析数据库响应。
+      第一段(检测)将只能记录采集失败，送中判定(第二段)不受影响。
+      如需完整评分，请先在目标机安装 jq。
+  when:
+    - ipquality_enabled | bool
+    - not (ipquality_jq.stat.exists | default(false))
+  changed_when: false
+  tags: [preflight, ops, ipquality, phase6]

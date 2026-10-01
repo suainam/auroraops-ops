@@ -45,6 +45,13 @@ ipquality_report_dir: /var/lib/ipquality
 ipquality_report_json: true
 ipquality_report_markdown: true
 
+# Scratch directory for the fetched upstream script and the staged helpers.
+# A plain variable rather than a registered `tempfile` result, because `--check`
+# neither executes `tempfile` nor persists `set_fact`; deriving it here keeps the
+# dry-run preview and the real run on exactly the same path. It is created and
+# removed within the same run, so nothing is left resident on the target.
+ipquality_workdir: "{{ ipquality_report_dir }}/.work"
+
 # Paths rollback must never delete. Note /var and /var/lib are listed even though
 # the default report directory lives under /var/lib: the guard constrains the
 # report directory to a *named* child of /var/lib and rejects these paths only

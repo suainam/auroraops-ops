@@ -2,40 +2,26 @@
 # Stage 1 (detection): run the official xykt/ipquality scoring script per exit.
 #
 # No persistent artifact is left on the target: the script is fetched to a
-# world-readable temp directory and the role's helpers are executed through the
-# `script` module, which cleans up after itself.
+# work directory that is removed at the end of this file, and the bundled
+# helpers are staged there and deleted again by remediate.yml.
 
-- name: 创建本次审计的临时工作目录
-  ansible.builtin.tempfile:
-    state: directory
-    suffix: ipquality
-  register: ipquality_tempdir
-  when: not (ipquality_offline | bool)
-  changed_when: false
-
-# A deterministic `ipquality_workdir`, not `ipquality_tempdir.path`.
-# `--check` does not execute the tempfile task, so any later reference to that
-# registered result is an undefined-variable error that aborts the dry-run
-# preview. The boolean form of `default` also covers the offline case, where the
-# tempfile task is skipped entirely.
-- name: 设定本次审计的临时工作目录
-  ansible.builtin.set_fact:
-    ipquality_workdir: "{{ ipquality_tempdir.path | default(ipquality_report_dir ~ '/.work', true) }}"
-  when: not (ipquality_offline | bool)
-  changed_when: false
-
-# The deterministic fallback is a real path, so it must exist before get_url
-# writes into it. Created unconditionally under the report directory, and
-# removed again at the end of this file, so nothing resident is left behind.
+# A single deterministic work directory, with no dependency on a registered
+# tempfile result. Two separate defects forced this shape:
+#   * `--check` does not execute `tempfile`, so referencing its registered
+#     result aborted the dry-run preview with an undefined-variable error.
+#   * `--check` does not persist `set_fact` either, so a workdir computed in a
+#     fact stayed invisible to the following `get_url`, which then failed with
+#     "Destination ... does not exist".
+# Deriving the path from a variable makes every stage agree, in check mode and
+# in a real run alike.
 - name: 确保临时工作目录存在
   ansible.builtin.file:
-    path: "{{ ipquality_workdir | default('', true) }}"
+    path: "{{ ipquality_workdir }}"
     state: directory
     mode: "0700"
   when:
     - ipquality_enabled | bool
     - not (ipquality_offline | bool)
-    - ipquality_workdir | default('', true) | length > 0
   changed_when: false
 
 - name: 拉取官方 ipquality 脚本 (只读上游评分逻辑)
@@ -44,8 +30,11 @@
     dest: "{{ ipquality_workdir }}/ipquality.sh"
     mode: "0700"
     timeout: 60
-  when: not (ipquality_offline | bool)
+  when:
+    - ipquality_enabled | bool
+    - not (ipquality_offline | bool)
   changed_when: false
+  no_log: true
 
 - name: 校验官方脚本指纹 (防上游被替换)
   ansible.builtin.stat:
@@ -53,6 +42,7 @@
     checksum_algorithm: sha256
   register: ipquality_script_stat
   when:
+    - ipquality_enabled | bool
     - not (ipquality_offline | bool)
     - ipquality_upstream_script_sha256 | length > 0
   changed_when: false
@@ -81,7 +71,6 @@
   when:
     - ipquality_enabled | bool
     - not (ipquality_offline | bool)
-    - ipquality_workdir | default('', true) | length > 0
   changed_when: false
 
 - name: 为每个出口执行官方检测
@@ -99,9 +88,7 @@
     IPQUALITY_SOCKS5_PORT: "{{ item.socks5.port | default('') }}"
     IPQUALITY_SOCKS5_USER: "{{ item.socks5.username | default('') }}"
     IPQUALITY_SOCKS5_PASS: "{{ item.socks5.password | default('') }}"
-    # `ipquality_workdir` is now a plain string, so no attribute access is
-    # involved. The boolean `default` covers the offline and `--check` cases.
-    IPQUALITY_SCRIPT: "{{ (ipquality_workdir | default('', true)) ~ '/ipquality.sh' }}"
+    IPQUALITY_SCRIPT: "{{ ipquality_workdir }}/ipquality.sh"
     # Parenthesised so `join` applies to the whole list; without the
     # parentheses Jinja binds the filter to the final term only and the
     # concatenation fails with "can only concatenate list (not str)".
@@ -158,10 +145,9 @@
 # durable output.
 - name: 清理本次审计的临时工作目录
   ansible.builtin.file:
-    path: "{{ ipquality_workdir | default('', true) }}"
+    path: "{{ ipquality_workdir }}"
     state: absent
   when:
     - ipquality_enabled | bool
     - not (ipquality_offline | bool)
-    - ipquality_workdir | default('', true) | length > 0
   changed_when: false

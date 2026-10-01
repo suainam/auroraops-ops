@@ -43,6 +43,9 @@
     stdin: "{{ ipquality_request | to_nice_json }}"
   environment:
     PYTHONPATH: "{{ ipquality_report_dir }}"
+    # Importing the staged analyzer would otherwise leave a __pycache__ beside
+    # it, which is residue a read-only audit must not leave on the target.
+    PYTHONDONTWRITEBYTECODE: "1"
   register: ipquality_verdict
   changed_when: false
   when: ipquality_enabled | bool
@@ -84,6 +87,8 @@
 
 # Zero-pollution: the staged helpers are removed once the verdict exists, so the
 # only durable output is report.json, report.json.md and observations/.
+# The bytecode cache is removed too: importing the staged analyzer would
+# otherwise leave a __pycache__ directory beside it on the target.
 - name: 清理暂存的判定引擎 (报告与观测数据保留)
   ansible.builtin.file:
     path: "{{ ipquality_report_dir }}/{{ item }}"
@@ -92,6 +97,7 @@
     - ipquality_pipeline.py
     - ipquality_analyzer.py
     - ipquality_geo_probe.py
+    - __pycache__
   when: ipquality_enabled | bool
   changed_when: false
 

@@ -48,9 +48,6 @@
     # Importing the staged analyzer would otherwise write a __pycache__ beside it
     # on the target, which is residue a read-only audit must not leave behind.
     PYTHONDONTWRITEBYTECODE: "1"
-    # Importing the staged analyzer would otherwise leave a __pycache__ beside
-    # it, which is residue a read-only audit must not leave on the target.
-    PYTHONDONTWRITEBYTECODE: "1"
   register: ipquality_verdict
   changed_when: false
   # The engine was not staged during a preview, so there is nothing to run.

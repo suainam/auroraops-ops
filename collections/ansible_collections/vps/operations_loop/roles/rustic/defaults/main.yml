@@ -97,6 +97,8 @@ rustic_darwin_rclone_bin_path: "{{ '/opt/homebrew/bin/rclone' if (ansible_archit
 rustic_darwin_rclone_config_path: "{{ ansible_env.HOME }}/.config/rclone/rclone.conf"
 rustic_darwin_launchd_local_label: "com.auroraops.rustic-local"
 rustic_darwin_launchd_cloud_label: "com.auroraops.rustic-cloud"
+rustic_darwin_launchd_cleanup_label: "com.auroraops.rustic-cleanup"
+rustic_darwin_cleanup_timer_minute: 45
 rustic_local_backup_timer_minute: "*/20"
 rustic_cloud_backup_timer_minute: "17"
 rustic_darwin_local_backup_minutes:

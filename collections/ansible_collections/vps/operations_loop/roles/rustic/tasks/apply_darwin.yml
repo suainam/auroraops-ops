@@ -90,6 +90,14 @@
   register: rustic_darwin_cloud_plist
   tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
 
+- name: Deploy LaunchAgent plist for cleanup
+  ansible.builtin.template:
+    src: rustic-cleanup.plist.j2
+    dest: "{{ rustic_darwin_launchagents_dir }}/{{ rustic_darwin_launchd_cleanup_label }}.plist"
+    mode: "0644"
+  register: rustic_darwin_cleanup_plist
+  tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
 - name: Manage local backup LaunchAgent
   community.general.launchd:
     name: "{{ rustic_darwin_launchd_local_label }}"
@@ -108,6 +116,15 @@
     - rustic_darwin_cloud_plist.changed
   tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
 
+- name: Manage cleanup LaunchAgent
+  community.general.launchd:
+    name: "{{ rustic_darwin_launchd_cleanup_label }}"
+    state: restarted
+  when:
+    - not ansible_check_mode
+    - rustic_darwin_cleanup_plist.changed
+  tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
 - name: Ensure local backup LaunchAgent is loaded
   community.general.launchd:
     name: "{{ rustic_darwin_launchd_local_label }}"
@@ -118,6 +135,13 @@
 - name: Ensure cloud backup LaunchAgent is loaded
   community.general.launchd:
     name: "{{ rustic_darwin_launchd_cloud_label }}"
+    state: started
+  when: not ansible_check_mode
+  tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+- name: Ensure cleanup LaunchAgent is loaded
+  community.general.launchd:
+    name: "{{ rustic_darwin_launchd_cleanup_label }}"
     state: started
   when: not ansible_check_mode
   tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]

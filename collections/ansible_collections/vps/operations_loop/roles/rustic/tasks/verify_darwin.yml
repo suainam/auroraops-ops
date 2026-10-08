@@ -42,6 +42,8 @@
           - "{{ rustic_darwin_script_path }}"
           - capabilities
       environment:
+        RUSTIC_ENV_FILE: "{{ rustic_darwin_config_dir }}/backup.env"
+        RUSTIC_LOG_FILE: "{{ rustic_darwin_log_dir }}/rustic_backup.log"
         PATH: "{{ ansible_env.PATH }}:/opt/homebrew/bin:/usr/local/bin"
         HOME: "{{ ansible_env.HOME }}"
       register: rustic_darwin_capabilities_result

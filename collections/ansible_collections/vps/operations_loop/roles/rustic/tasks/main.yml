@@ -1,4 +1,11 @@
 ---
+- name: Gather os facts for Rustic platform routing
+  ansible.builtin.setup:
+    gather_subset:
+      - "!all"
+      - "os_family"
+  when: ansible_system is not defined
+  tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
 - name: 角色启用检查
   ansible.builtin.debug:
     msg: "Role rustic is disabled, skipping"

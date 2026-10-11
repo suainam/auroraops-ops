@@ -77,16 +77,16 @@
       ansible.builtin.include_role:
         name: vps.applications.application_service
       vars:
-        application_service_app_service_name: unified-backup
-        application_service_app_service_description: "Unified Backup Service (Python Version)"
-        application_service_app_service_exec_start: "{{ python_executor }} {{ lookup('env', 'HOME') }}/AuroraOps/scripts/manage_docker_data.py all"
-        application_service_app_service_user: root
-        application_service_app_service_group: root
-        application_service_app_service_type: oneshot
-        application_service_app_service_timeout: 1800
-        application_service_app_service_enabled: false
-        application_service_app_service_state: stopped
-        application_service_app_service_environment: >-
+        app_service_name: unified-backup
+        app_service_description: "Unified Backup Service (Python Version)"
+        app_service_exec_start: "{{ python_executor }} /root/AuroraOps/scripts/manage_docker_data.py all"
+        app_service_user: root
+        app_service_group: root
+        app_service_type: oneshot
+        app_service_timeout: 1800
+        app_service_enabled: false
+        app_service_state: stopped
+        app_service_environment: >-
           {{
             {
               'BACKUP_SOURCE_DOCKER_DIR': rustic_backup_source_docker_dir,
@@ -118,10 +118,10 @@
       ansible.builtin.include_role:
         name: vps.applications.application_timer
       vars:
-        application_timer_app_timer_name: unified-backup
-        application_timer_app_timer_description: "Unified Backup Timer"
-        application_timer_app_timer_on_calendar: "*-*-* *:0/10"
-        application_timer_app_timer_on_boot_sec: 10m
-        application_timer_app_timer_randomized_delay: 15m
-        application_timer_app_timer_persistent: true
+        app_timer_name: unified-backup
+        app_timer_description: "Unified Backup Timer"
+        app_timer_on_calendar: "*-*-* *:0/10"
+        app_timer_on_boot_sec: 10m
+        app_timer_randomized_delay: 15m
+        app_timer_persistent: true
       tags: [deploy, backup, operations_loop, phase7]

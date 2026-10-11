@@ -1,0 +1,20 @@
+---
+- name: "[Health Checks] Check legacy scripts and logrotate config are absent after rollback"
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /usr/local/bin/notify.sh
+    - /usr/local/bin/alert_check.sh
+    - /usr/local/bin/heartbeat.sh
+    - /var/log/health_checks
+    - "{{ health_checks_logrotate_config_path }}"
+  register: health_checks_rollback_verify_stats
+  tags: [rollback_verify, observability, health_checks, phase6]
+
+- name: "[Health Checks] Assert rollback cleaned up targeted artifacts"
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists
+    fail_msg: "Health checks artifact was not removed during rollback: {{ item.item }}"
+  loop: "{{ health_checks_rollback_verify_stats.results }}"
+  tags: [rollback_verify, observability, health_checks, phase6]

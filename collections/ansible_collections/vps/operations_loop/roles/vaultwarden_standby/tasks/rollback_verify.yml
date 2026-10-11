@@ -1,0 +1,42 @@
+---
+- name: "[Vaultwarden Standby] Verify source access files are removed after rollback"
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ vaultwarden_standby_source_authorized_keys }}"
+    - "{{ vaultwarden_standby_source_sudoers }}"
+    - "{{ vaultwarden_standby_source_rsyncd_config }}"
+  register: vaultwarden_standby_rollback_source_stats
+  when: vaultwarden_standby_mode == 'source'
+  tags: [rollback_verify, operations_loop, vaultwarden_standby, phase6]
+
+- name: "[Vaultwarden Standby] Assert source access files are absent after rollback"
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists
+    fail_msg: "Vaultwarden standby source file still present after rollback: {{ item.item }}"
+  loop: "{{ vaultwarden_standby_rollback_source_stats.results | default([]) }}"
+  when: vaultwarden_standby_mode == 'source'
+  tags: [rollback_verify, operations_loop, vaultwarden_standby, phase6]
+
+- name: "[Vaultwarden Standby] Verify receiver units and scripts are removed after rollback"
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "/etc/systemd/system/{{ vaultwarden_standby_service_name }}.timer"
+    - "/etc/systemd/system/{{ vaultwarden_standby_service_name }}.service"
+    - "{{ vaultwarden_standby_script_path }}"
+  register: vaultwarden_standby_rollback_receiver_stats
+  when: vaultwarden_standby_mode == 'standby'
+  tags: [rollback_verify, operations_loop, vaultwarden_standby, phase6]
+
+- name: "[Vaultwarden Standby] Assert receiver units are absent after rollback"
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists
+    fail_msg: "Vaultwarden standby receiver file still present after rollback: {{ item.item }}"
+  loop: "{{ vaultwarden_standby_rollback_receiver_stats.results | default([]) }}"
+  when: vaultwarden_standby_mode == 'standby'
+  tags: [rollback_verify, operations_loop, vaultwarden_standby, phase6]

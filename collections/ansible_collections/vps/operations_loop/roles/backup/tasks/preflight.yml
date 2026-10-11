@@ -1,0 +1,12 @@
+---
+- name: "[Backup] Check destination system directory"
+  become: true
+  ansible.builtin.stat:
+    path: "{{ backup_dest_system_dir }}"
+  register: backup_preflight_dest
+  tags: [preflight, operations_loop, backup, phase6]
+
+- name: "[Backup] Summarize preflight status"
+  ansible.builtin.debug:
+    msg: "SystemBackupDirExists={{ backup_preflight_dest.stat.exists }}"
+  tags: [preflight, operations_loop, backup, phase6]

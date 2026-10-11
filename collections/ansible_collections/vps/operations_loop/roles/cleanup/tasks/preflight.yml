@@ -1,0 +1,12 @@
+---
+- name: "[Cleanup] Check existing docker-prune.py script"
+  become: true
+  ansible.builtin.stat:
+    path: /usr/local/bin/docker-prune.py
+  register: cleanup_preflight_prune_script
+  tags: [preflight, cleanup_system, cleanup, operations_loop, phase6]
+
+- name: "[Cleanup] Summarize preflight status"
+  ansible.builtin.debug:
+    msg: "PruneScriptExists={{ cleanup_preflight_prune_script.stat.exists }}"
+  tags: [preflight, cleanup_system, cleanup, operations_loop, phase6]

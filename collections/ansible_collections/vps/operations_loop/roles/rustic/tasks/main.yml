@@ -1,4 +1,11 @@
 ---
+- name: Gather os facts for Rustic platform routing
+  ansible.builtin.setup:
+    gather_subset:
+      - "!all"
+      - "os_family"
+  when: ansible_system is not defined
+  tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
 - name: 角色启用检查
   ansible.builtin.debug:
     msg: "Role rustic is disabled, skipping"
@@ -28,7 +35,7 @@
     file: apply_darwin.yml
   when:
     - auroraops_roles['operations_loop']['rustic'] | default(true) | bool
-    - ansible_system == 'Darwin'
+    - (ansible_system | default(ansible_facts['system'] | default('Linux'))) == 'Darwin'
   tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
 
 - name: 包含安装任务
@@ -36,7 +43,7 @@
     file: install.yml
   when:
     - auroraops_roles['operations_loop']['rustic'] | default(true) | bool
-    - ansible_system != 'Darwin'
+    - (ansible_system | default(ansible_facts['system'] | default('Linux'))) != 'Darwin'
   tags: [deploy, operations_loop, rustic, rustic_install, phase7]
 
 - name: 包含初始化任务

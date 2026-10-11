@@ -42,6 +42,8 @@
           - "{{ rustic_darwin_script_path }}"
           - capabilities
       environment:
+        RUSTIC_ENV_FILE: "{{ rustic_darwin_config_dir }}/backup.env"
+        RUSTIC_LOG_FILE: "{{ rustic_darwin_log_dir }}/rustic_backup.log"
         PATH: "{{ ansible_env.PATH }}:/opt/homebrew/bin:/usr/local/bin"
         HOME: "{{ ansible_env.HOME }}"
       register: rustic_darwin_capabilities_result
@@ -116,7 +118,7 @@
         path: "{{ rustic_darwin_launchagents_dir }}/{{ item }}"
       loop: >-
         {{
-          ['com.auroraops.rustic-local.plist']
+          ['com.auroraops.rustic-local.plist', rustic_darwin_launchd_cleanup_label ~ '.plist']
           + (['com.auroraops.rustic-cloud.plist'] if (rustic_darwin_verify_cloud_remotes | length > 0) else [])
         }}
       register: rustic_darwin_plist_files
@@ -140,7 +142,7 @@
       failed_when: false
       loop: >-
         {{
-          ['com.auroraops.rustic-local']
+          ['com.auroraops.rustic-local', rustic_darwin_launchd_cleanup_label]
           + (['com.auroraops.rustic-cloud'] if (rustic_darwin_verify_cloud_remotes | length > 0) else [])
         }}
       tags: [verify, operations_loop, rustic, rustic_verify, phase7]

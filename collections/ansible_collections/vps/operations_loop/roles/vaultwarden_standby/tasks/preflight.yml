@@ -1,0 +1,5 @@
+---
+- name: "[Vaultwarden Standby] Check standby mode and configuration"
+  ansible.builtin.debug:
+    msg: "Mode={{ vaultwarden_standby_mode }}"
+  tags: [preflight, operations_loop, vaultwarden_standby, phase6]

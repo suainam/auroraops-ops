@@ -1,0 +1,21 @@
+---
+- name: "[Vaultwarden Snapshot] Verify managed systemd units and script are removed after rollback"
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "/etc/systemd/system/{{ vaultwarden_snapshot_service_name }}.timer"
+    - "/etc/systemd/system/{{ vaultwarden_snapshot_service_name }}.service"
+    - "{{ vaultwarden_snapshot_script_path }}"
+  register: vaultwarden_snapshot_rollback_verify_stats
+  when: ansible_system != 'Darwin'
+  tags: [rollback_verify, operations_loop, vaultwarden_snapshot, phase6]
+
+- name: "[Vaultwarden Snapshot] Assert managed units are absent after rollback"
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists
+    fail_msg: "Vaultwarden snapshot artifact still present after rollback: {{ item.item }}"
+  loop: "{{ vaultwarden_snapshot_rollback_verify_stats.results }}"
+  when: ansible_system != 'Darwin'
+  tags: [rollback_verify, operations_loop, vaultwarden_snapshot, phase6]

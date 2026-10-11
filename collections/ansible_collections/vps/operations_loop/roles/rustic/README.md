@@ -65,22 +65,31 @@ Rustic 角色提供企业级块级去重备份功能，支持本地+云端并行
 
 ## 3. 架构
 
-### 服务结构
+### 服务结构 (Linux 与 macOS 双端对齐)
 
+**Linux (Systemd)**:
 ```
-rustic-backup-local.timer    → 触发本地备份
+rustic-backup-local.timer    → 触发本地备份 (hourly / :00/:20/:40)
 rustic-backup-local.service  → 执行 local 模式
 
-rustic-backup-cloud.timer    → 触发云端备份
+rustic-backup-cloud.timer    → 触发云端备份 (00/6:17 错峰)
 rustic-backup-cloud.service  → 执行 cloud 模式
 
-rustic-cleanup.timer    → 每小时触发 (:45) - 错开云端备份与本地清理
-rustic-cleanup.service  → 执行清理脚本
+rustic-cleanup.timer         → 每小时触发 (:45) - 错开云端备份与本地清理
+rustic-cleanup.service       → 执行清理脚本 (forget + prune)
 
-rustic-check.timer      → 按 rustic_check_timer_calendar 触发
-rustic-check.service   → 健康检查
+rustic-check.timer           → 按 rustic_check_timer_calendar 触发
+rustic-check.service         → 健康检查
 ```
 
+**macOS / Darwin (Launchd)**:
+```
+com.auroraops.rustic-local   → 触发本地备份 (StartCalendarInterval: :00, :20, :40)
+com.auroraops.rustic-cloud   → 触发云端备份 (StartCalendarInterval: 00/6:17)
+com.auroraops.rustic-cleanup → 触发定时清理 (StartCalendarInterval: 每小时 :45 分)
+```
+
+两端统一使用 `rustic_backup.py` 进行生命周期管理，共享同一套锁机制与保留规则。
 四类操作都先获取 `/run/lock/rustic-backup.lock`。锁已被占用时本次运行返回 75，
 systemd unit 用 `SuccessExitStatus=75` 将其记录为预期跳过；
 不并发修改仓库。所有 timer 使用 `Persistent=false`，部署启用 timer 时不会补跑错过的任务。

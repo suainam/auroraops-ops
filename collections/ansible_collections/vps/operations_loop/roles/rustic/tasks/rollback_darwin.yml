@@ -18,6 +18,14 @@
       when: not ansible_check_mode
       tags: [rollback, operations_loop, rustic, rustic_rollback, phase7]
 
+    - name: Unload and disable cleanup Rustic LaunchAgent
+      community.general.launchd:
+        name: "{{ rustic_darwin_launchagents_dir }}/{{ rustic_darwin_launchd_cleanup_label }}.plist"
+        enabled: false
+        state: stopped
+      when: not ansible_check_mode
+      tags: [rollback, operations_loop, rustic, rustic_rollback, phase7]
+
     - name: Remove Rustic LaunchAgent plist files
       ansible.builtin.file:
         path: "{{ item }}"
@@ -25,6 +33,7 @@
       loop:
         - "{{ rustic_darwin_launchagents_dir }}/com.auroraops.rustic-local.plist"
         - "{{ rustic_darwin_launchagents_dir }}/com.auroraops.rustic-cloud.plist"
+        - "{{ rustic_darwin_launchagents_dir }}/{{ rustic_darwin_launchd_cleanup_label }}.plist"
       tags: [rollback, operations_loop, rustic, rustic_rollback, phase7]
 
     - name: Remove Rustic Application Support directories (optional, preserve data by default)

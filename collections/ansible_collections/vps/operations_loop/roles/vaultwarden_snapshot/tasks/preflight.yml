@@ -1,0 +1,12 @@
+---
+- name: "[Vaultwarden Snapshot] Check snapshot script presence"
+  become: true
+  ansible.builtin.stat:
+    path: "{{ vaultwarden_snapshot_script_path }}"
+  register: vaultwarden_snapshot_preflight_script
+  tags: [preflight, operations_loop, vaultwarden_snapshot, phase6]
+
+- name: "[Vaultwarden Snapshot] Summarize preflight status"
+  ansible.builtin.debug:
+    msg: "ScriptExists={{ vaultwarden_snapshot_preflight_script.stat.exists }}"
+  tags: [preflight, operations_loop, vaultwarden_snapshot, phase6]

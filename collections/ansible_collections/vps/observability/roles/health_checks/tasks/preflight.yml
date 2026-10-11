@@ -1,0 +1,15 @@
+---
+- name: "[Health Checks] Check existing health_check_runner.py script"
+  ansible.builtin.stat:
+    path: /usr/local/bin/health_check_runner.py
+  register: health_checks_preflight_runner
+  tags: [preflight, observability, health_checks, phase6]
+
+- name: "[Health Checks] Gather systemd service facts for preflight"
+  ansible.builtin.service_facts:
+  tags: [preflight, observability, health_checks, phase6]
+
+- name: "[Health Checks] Summarize preflight status"
+  ansible.builtin.debug:
+    msg: "RunnerExists={{ health_checks_preflight_runner.stat.exists }} TimerPresent={{ 'health_check_runner.timer' in ansible_facts.services }}"
+  tags: [preflight, observability, health_checks, phase6]

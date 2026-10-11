@@ -1,0 +1,12 @@
+---
+- name: "[CF Probe] Check existing cf-probe binary"
+  become: true
+  ansible.builtin.stat:
+    path: "{{ cf_probe_install_dir }}/cf-probe"
+  register: cf_probe_preflight_binary
+  tags: [preflight, observability, cf_probe, phase6]
+
+- name: "[CF Probe] Summarize preflight status"
+  ansible.builtin.debug:
+    msg: "Enabled={{ cf_probe_enabled | default(false) | bool }} BinaryExists={{ cf_probe_preflight_binary.stat.exists }}"
+  tags: [preflight, observability, cf_probe, phase6]

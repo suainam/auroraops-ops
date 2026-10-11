@@ -1,0 +1,19 @@
+---
+- name: "[CF Probe] Verify binary and service unit are absent after rollback"
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ cf_probe_install_dir }}/cf-probe"
+    - "{{ cf_probe_config_dir }}"
+    - /etc/systemd/system/cf-probe.service
+  register: cf_probe_rollback_verify_stats
+  tags: [rollback_verify, observability, cf_probe, phase6]
+
+- name: "[CF Probe] Assert rollback cleaned up cf_probe artifacts"
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists
+    fail_msg: "cf_probe artifact was not removed during rollback: {{ item.item }}"
+  loop: "{{ cf_probe_rollback_verify_stats.results }}"
+  tags: [rollback_verify, observability, cf_probe, phase6]

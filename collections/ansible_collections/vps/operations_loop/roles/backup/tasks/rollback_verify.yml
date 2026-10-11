@@ -1,0 +1,14 @@
+---
+- name: "[Backup] Verify existing backup archive directories remain intact after rollback"
+  become: true
+  ansible.builtin.stat:
+    path: "{{ backup_dest_system_dir }}"
+  register: backup_rollback_dest_stat
+  tags: [rollback_verify, operations_loop, backup, phase6]
+
+- name: "[Backup] Assert backup archive directory was not destructively deleted"
+  ansible.builtin.assert:
+    that:
+      - backup_rollback_dest_stat.stat.exists
+    fail_msg: "Backup destination directory missing after rollback"
+  tags: [rollback_verify, operations_loop, backup, phase6]

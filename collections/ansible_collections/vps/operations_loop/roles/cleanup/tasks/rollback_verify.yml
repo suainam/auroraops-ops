@@ -1,0 +1,14 @@
+---
+- name: "[Cleanup] Verify docker-prune.py script remains executable after rollback"
+  become: true
+  ansible.builtin.stat:
+    path: /usr/local/bin/docker-prune.py
+  register: cleanup_rollback_prune_script
+  tags: [rollback_verify, cleanup_system, cleanup, operations_loop, phase6]
+
+- name: "[Cleanup] Assert prune script is intact after rollback"
+  ansible.builtin.assert:
+    that:
+      - cleanup_rollback_prune_script.stat.exists
+    fail_msg: "docker-prune.py is missing after rollback"
+  tags: [rollback_verify, cleanup_system, cleanup, operations_loop, phase6]

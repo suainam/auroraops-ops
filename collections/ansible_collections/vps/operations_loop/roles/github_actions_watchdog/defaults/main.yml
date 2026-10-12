@@ -19,3 +19,4 @@ github_actions_watchdog_targets:
 github_actions_watchdog_notifier_path: "/usr/local/bin/notifier.py"
 github_actions_watchdog_notifier_python: "{{ health_checks_python_interpreter_path | default('/opt/aurora_venv/bin/python3') }}"
 github_actions_watchdog_notify_failure: true
+github_auroraops_token: "{{ vault_github_token | default('') }}"

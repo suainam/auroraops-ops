@@ -141,46 +141,61 @@ def run_command(cmd, timeout=600, check=True, env=None):
         return "", str(e), -1
 
 
+def _postgres_user_exists():
+    """Return True when this host actually runs PostgreSQL."""
+    try:
+        import pwd
+        pwd.getpwnam("postgres")
+        return True
+    except (KeyError, ImportError):
+        return False
+
+
 def export_databases():
-    """导出数据库"""
+    """导出数据库
+
+    只有本机真的具备该数据库时才导出：容器化或未安装的节点上没有
+    `pg_dumpall` / `postgres` 用户，盲目尝试只会每小时写一条错误日志。
+    能力缺失按 INFO 记录，失败仍按 ERROR 记录。
+    """
     exported = []
     if PG_PASSWORD:
-        logger.info("Database: Exporting PostgreSQL...")
-        try:
-            pg_file = "/tmp/postgresql_all_dbs.sql"
-            subprocess.run(
-                ["sudo", "-u", "postgres", "pg_dumpall", "-f", pg_file],
-                check=True,
-                timeout=300,
-                env=get_env(),
-            )
-            exported.append(pg_file)
-            logger.info(f"Database: PostgreSQL exported ({pg_file})")
-        except Exception as e:
-            logger.error(f"Database: PostgreSQL export failed: {e}")
+        if not (shutil.which("pg_dumpall") and _postgres_user_exists()):
+            logger.info("Database: PostgreSQL export skipped (no local server)")
+        else:
+            logger.info("Database: Exporting PostgreSQL...")
+            try:
+                pg_file = "/tmp/postgresql_all_dbs.sql"
+                subprocess.run(
+                    ["sudo", "-u", "postgres", "pg_dumpall", "-f", pg_file],
+                    check=True,
+                    timeout=300,
+                    env=get_env(),
+                )
+                exported.append(pg_file)
+                logger.info(f"Database: PostgreSQL exported ({pg_file})")
+            except Exception as e:
+                logger.error(f"Database: PostgreSQL export failed: {e}")
 
     if REDIS_PASSWORD:
-        logger.info("Database: Triggering Redis SAVE...")
-        try:
-            subprocess.run(
-                ["redis-cli", "-a", REDIS_PASSWORD, "SAVE"],
-                check=True,
-                timeout=60,
-                env=get_env(),
-            )
-            if os.path.exists("/var/lib/redis/dump.rdb"):
-                exported.append("/var/lib/redis/dump.rdb")
-                logger.info("Database: Redis SAVE completed")
-        except Exception as e:
-            logger.error(f"Database: Redis SAVE failed: {e}")
+        if not shutil.which("redis-cli"):
+            logger.info("Database: Redis export skipped (no local server)")
+        else:
+            logger.info("Database: Triggering Redis SAVE...")
+            try:
+                subprocess.run(
+                    ["redis-cli", "-a", REDIS_PASSWORD, "SAVE"],
+                    check=True,
+                    timeout=60,
+                    env=get_env(),
+                )
+                if os.path.exists("/var/lib/redis/dump.rdb"):
+                    exported.append("/var/lib/redis/dump.rdb")
+                    logger.info("Database: Redis SAVE completed")
+            except Exception as e:
+                logger.error(f"Database: Redis SAVE failed: {e}")
 
     return exported
-
-def export_databases_if_enabled():
-    """Run the existing database exporter only when configured for this host."""
-    if os.getenv("RUSTIC_EXPORT_DATABASES", "true").lower() in {"0", "false", "no"}:
-        return []
-    return export_databases()
 
 
 def get_backup_tag():
@@ -348,7 +363,7 @@ def backup_all(mode="all"):
     logger.info("Backup: Starting optimized complete system backup")
     logger.info("=" * 60)
 
-    exported = export_databases_if_enabled()
+    exported = export_databases()
 
     all_paths = []
     if os.path.exists(SOURCE_DIR):

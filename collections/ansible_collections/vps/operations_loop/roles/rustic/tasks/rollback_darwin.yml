@@ -43,6 +43,7 @@
       loop:
         - "{{ rustic_darwin_launchagents_dir }}/com.auroraops.rustic-local.plist"
         - "{{ rustic_darwin_launchagents_dir }}/com.auroraops.rustic-cloud.plist"
+        - "{{ rustic_darwin_launchagents_dir }}/{{ rustic_darwin_launchd_cleanup_label }}.plist"
         - "{{ rustic_darwin_launchagents_dir }}/{{ rustic_darwin_launchd_audit_label }}.plist"
       tags: [rollback, operations_loop, rustic, rustic_rollback, phase7]
 

@@ -70,6 +70,7 @@ FORGET_TIMEOUT_SECONDS = int(os.getenv("RUSTIC_FORGET_TIMEOUT_SECONDS", "900"))
 CLEANUP_SUCCESS_MARKER = _resolve_path(
     os.getenv("RUSTIC_CLEANUP_SUCCESS_MARKER", "/var/lib/rustic/cleanup-success.json")
 )
+RESTORE_PROBE_DIR = _resolve_path(os.getenv("RUSTIC_RESTORE_PROBE_DIR", "/var/tmp"))
 RESTORE_PROBE_PATH = os.getenv("RUSTIC_RESTORE_PROBE_PATH", "/etc/ssh/sshd_config")
 # Daily freshness audit: every configured repository must have a snapshot newer
 # than the allowed age, otherwise the audit job exits non-zero for the scheduler.

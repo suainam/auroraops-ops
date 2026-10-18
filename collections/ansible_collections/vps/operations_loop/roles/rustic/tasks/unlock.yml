@@ -21,7 +21,7 @@
         bash -c '
         set -euo pipefail
         export RUSTIC_PASSWORD="{{ vault_rustic_password }}"
-        {% for remote in backup_cloud_remotes %}
+        {% for remote in rustic_backup_cloud_remotes %}
         rustic -r rclone:{{ remote }}:{{ backup_cloud_prefix }}/complete unlock
         {% endfor %}
         '

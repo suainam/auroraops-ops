@@ -35,7 +35,7 @@
         export RUSTIC_PASSWORD="{{ vault_rustic_password }}"
         export HTTP_PROXY="{{ proxy_http | default('') }}"
         export HTTPS_PROXY="{{ proxy_https | default('') }}"
-        for remote in {{ backup_cloud_remotes | join(' ') }}; do
+        for remote in {{ rustic_backup_cloud_remotes | join(' ') }}; do
           repo="rclone:${remote}:{{ backup_cloud_prefix }}/complete"
           if ! rustic -r "${repo}" cat config > /dev/null 2>&1; then
             echo "Initializing ${repo}..."

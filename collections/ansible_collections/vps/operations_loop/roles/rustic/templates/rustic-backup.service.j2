@@ -11,3 +11,9 @@ EnvironmentFile=/etc/rustic/backup.env
 ExecStart={{ python_executor }} /usr/local/bin/rustic_backup.py {{ rustic_backup_mode }}
 TimeoutStartSec={{ rustic_backup_service_timeout }}
 SuccessExitStatus=75
+
+# Host pressure reduction: low priority IO and CPU scheduling
+Nice=19
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+CPUWeight=20

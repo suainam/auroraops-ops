@@ -61,6 +61,9 @@ rustic_cloud_backup_timer_calendar: "*-*-* 00/6:17"
 rustic_check_timer_calendar: "Sun *-*-* 04:30"
 # 清理：每小时1次（45分），与云端备份（00/6:17 + 15m 随机延迟窗口）彻底错开
 rustic_cleanup_timer_calendar: "*-*-* *:45"
+# 清理周期（小时），供 health_checks 派生清理标记年龄阈值。
+# 必须与上面的 calendar 一致；tests/unit 有契约测试防止两者漂移。
+rustic_cleanup_interval_hours: 1
 
 # Restore 恢复配置
 rustic_restore_mode: false

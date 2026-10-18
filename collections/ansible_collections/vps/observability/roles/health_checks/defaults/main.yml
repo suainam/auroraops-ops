@@ -93,8 +93,13 @@ health_checks_rustic_local_warning_age_hours: 2.5
 health_checks_rustic_local_critical_age_hours: 4
 health_checks_rustic_cloud_warning_age_hours: 8
 health_checks_rustic_cloud_critical_age_hours: 14
-health_checks_rustic_cleanup_warning_age_hours: 2.5
-health_checks_rustic_cleanup_critical_age_hours: 4
+
+# 清理标记年龄阈值由清理周期派生：标记最老只可能等于一个周期，
+# 所以告警线 = 周期 + 2h 宽限，严重线 = 2 个周期 + 2h。
+# 调 rustic_cleanup_timer_calendar 时只需同步这一个间隔，不再两处魔数。
+health_checks_rustic_cleanup_interval_hours: "{{ rustic_cleanup_interval_hours | default(1) }}"
+health_checks_rustic_cleanup_warning_age_hours: "{{ health_checks_rustic_cleanup_interval_hours | float + 2 }}"
+health_checks_rustic_cleanup_critical_age_hours: "{{ health_checks_rustic_cleanup_interval_hours | float * 2 + 2 }}"
 
 # ===========================================
 # 运行环境配置

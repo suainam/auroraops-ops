@@ -566,6 +566,28 @@ def inspect_all():
     return True
 
 
+def _parse_snapshot_time(value):
+    """Parse a rustic RFC3339 timestamp on Python 3.9 (the macOS system python).
+
+    Rustic emits nanosecond precision (``.644242000+00:00``); ``fromisoformat``
+    only accepts microseconds before Python 3.11, so the fraction is truncated
+    to six digits. Naive values are treated as local time.
+    """
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    head, sep, tail = text.partition(".")
+    if sep:
+        digits = ""
+        for ch in tail:
+            if not ch.isdigit():
+                break
+            digits += ch
+        rest = tail[len(digits):]
+        text = f"{head}.{digits[:6].ljust(6, '0')}{rest}"
+    return datetime.fromisoformat(text)
+
+
 def audit_all():
     """Fail when any configured repository is stale or has no snapshot."""
     now = datetime.now().astimezone()
@@ -578,9 +600,7 @@ def audit_all():
             repositories.append({"repository": repo, "fresh": False, "reason": "unreadable"})
             continue
         try:
-            latest = datetime.fromisoformat(
-                evidence["latest_snapshot_time"].replace("Z", "+00:00")
-            )
+            latest = _parse_snapshot_time(evidence["latest_snapshot_time"])
         except (AttributeError, ValueError) as exc:
             logger.error(f"Audit: unparseable snapshot time for {repo}: {exc}")
             all_fresh = False

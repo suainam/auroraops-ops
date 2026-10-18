@@ -60,3 +60,18 @@ vaultwarden_snapshot.py prune --keep 12
 - 不停止或重启 Vaultwarden。
 - 不替代 Rustic；Rustic 仍负责长期和云端备份。
 - 不处理 Pi 同步、灾备启动、DNS 切换或回切。
+
+### 内部逻辑
+
+- 生成运行态 Vaultwarden SQLite 的一致快照：内置 SQLite backup + attachments/sends 双遍复制 + config.json/rsa_key*，写入 `.staging-<snapshot-id>`，经 `quick_check` 与 SHA-256 校验后原子发布 `manifest.json` 并刷新 `latest.json`。
+- 不停止/重启 Vaultwarden；已发布快照排除活动 `-wal/-shm`、日志、`icon_cache`、`tmp`；取得独占锁后清理历史 `.staging-*`（自愈被打断的未发布快照）。
+- 双端实现：Linux 走 systemd service+timer；macOS 走 launchd（`com.auroraops.vaultwarden-snapshot.plist`，600s）。
+- 创建前后通过 `vaultwarden_snapshot_health_url` 探活；失败时复用 health_checks notifier。
+
+## 维护与排查
+
+- 查看最新快照: `vaultwarden_snapshot.py verify latest`；恢复演练: `vaultwarden_snapshot.py restore-test latest`；清理: `vaultwarden_snapshot.py prune --keep 12`。
+- 检查单元: `systemctl status vaultwarden-snapshot.timer`（Linux）/ `launchctl list | grep vaultwarden-snapshot`（macOS）。
+- 快照根目录: `vaultwarden_snapshot_root`（`/opt/backups/vaultwarden-snapshots` 或 macOS `~/data/backups/...`）。
+- 探活失败：确认 Vaultwarden 在 `vaultwarden_snapshot_health_url`（`/alive`，默认端口 30007）可访问。
+

@@ -68,6 +68,14 @@ cf_probe_secret: "cfsm_74b947bfcd9473924c84fa528d84b0d2"
 - 磁盘取探针可见根文件系统；内存沿用探针的 `/proc/meminfo` 可见总量与可回收内存语义。`memory.current` 包含页缓存等 cgroup 记账值，不能直接替代探针的用户态 `ram_used`。
 - AuroraOps 不在部署层补偿外部监控的单位/分母转换。若要改为 cgroup `memory.current` 口径，应在 [`cfsm-agent`](https://github.com/huilang-me/cfsm-agent) 与 [`CF-Server-Monitor`](https://github.com/huilang-me/CF-Server-Monitor) 的 D1/UI 契约中联动变更；当前仓库仅记录该外部依赖，避免制造第二套上报协议。
 
+## 维护与排查
+
+- 查看运行状态: `journalctl -u cf-probe --no-pager -n 20`（systemd）或 `tail -n 20 /var/log/cf-probe.log`（OpenRC）。
+- 检查单元: `systemctl status cf-probe`（或 `rc-service cf-probe status`）。
+- 配置校验: `cat /etc/config/cf-probe/config.conf`；密钥来自 vault `vault_cf_server_monitor_api_secret`，缺失则不上报。
+- 手动启停: `systemctl restart cf-probe`；`cf_probe_enabled: false` 时所有部署/验证任务跳过。
+- 上报异常排查: 确认 `cf_probe_server_id`、`cf_probe_secret`、`cf_probe_worker_url` 已注入，且目标仓库已注册 CF-Server-Monitor。
+
 ### License
 
 MIT

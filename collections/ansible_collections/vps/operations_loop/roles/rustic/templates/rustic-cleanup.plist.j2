@@ -26,7 +26,7 @@
         <key>RCLONE_CONFIG</key>
         <string>{{ rustic_darwin_rclone_config_path | default(rustic_rclone_config_path) }}</string>
         <key>PATH</key>
-        <string>{{ ansible_env.PATH }}:/opt/homebrew/bin:/usr/local/bin</string>
+        <string>{{ rustic_darwin_path_env | default(ansible_env.PATH ~ ':/opt/zerobrew/bin:/opt/homebrew/bin:/usr/local/bin') }}</string>
         <key>HOME</key>
         <string>{{ ansible_env.HOME }}</string>
         <key>RUSTIC_LOG_FILE</key>

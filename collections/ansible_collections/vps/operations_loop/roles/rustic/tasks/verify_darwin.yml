@@ -3,9 +3,7 @@
   tags: [verify, operations_loop, rustic, rustic_verify, phase7]
   block:
     - name: Resolve Darwin binary paths for verification
-      ansible.builtin.set_fact:
-        rustic_darwin_bin_path: "{{ '/opt/homebrew/bin/rustic' if (ansible_architecture | default('arm64')) == 'arm64' else '/usr/local/bin/rustic' }}"
-      when: rustic_darwin_bin_path is not defined
+      ansible.builtin.import_tasks: resolve_darwin_binaries.yml
       tags: [verify, operations_loop, rustic, rustic_verify, phase7]
 
     - name: Resolve effective cloud remotes for Darwin verification
@@ -44,7 +42,7 @@
       environment:
         RUSTIC_ENV_FILE: "{{ rustic_darwin_config_dir }}/backup.env"
         RUSTIC_LOG_FILE: "{{ rustic_darwin_log_dir }}/rustic_backup.log"
-        PATH: "{{ ansible_env.PATH }}:/opt/homebrew/bin:/usr/local/bin"
+        PATH: "{{ rustic_darwin_path_env }}"
         HOME: "{{ ansible_env.HOME }}"
       register: rustic_darwin_capabilities_result
       changed_when: false
@@ -63,6 +61,7 @@
           - "'local' in rustic_darwin_deployed_capabilities.actions"
           - "'cloud' in rustic_darwin_deployed_capabilities.actions"
           - "'check' in rustic_darwin_deployed_capabilities.actions"
+          - "'audit' in rustic_darwin_deployed_capabilities.actions"
           - "'inspect' in rustic_darwin_deployed_capabilities.actions"
           - "'restore-probe' in rustic_darwin_deployed_capabilities.actions"
         fail_msg: Deployed Rustic script is stale or lacks lifecycle evidence actions
@@ -77,12 +76,35 @@
         RUSTIC_ENV_FILE: "{{ rustic_darwin_config_dir }}/backup.env"
         RUSTIC_BIN_PATH: "{{ rustic_darwin_bin_path | default(rustic_bin_path) }}"
         BACKUP_CLOUD_REMOTES: "{{ rustic_darwin_verify_cloud_remotes | join(',') }}"
-        PATH: "{{ ansible_env.PATH }}:/opt/homebrew/bin:/usr/local/bin"
+        PATH: "{{ rustic_darwin_path_env }}"
         HOME: "{{ ansible_env.HOME }}"
       register: rustic_darwin_repository_inspection_result
       changed_when: false
       no_log: true
       tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Run Rustic freshness audit
+      ansible.builtin.command:
+        argv:
+          - "{{ rustic_darwin_script_path }}"
+          - audit
+      environment:
+        RUSTIC_ENV_FILE: "{{ rustic_darwin_config_dir }}/backup.env"
+        RUSTIC_BIN_PATH: "{{ rustic_darwin_bin_path | default(rustic_bin_path) }}"
+        BACKUP_CLOUD_REMOTES: "{{ rustic_darwin_verify_cloud_remotes | join(',') }}"
+        RUSTIC_AUDIT_MARKER: "{{ rustic_darwin_audit_marker }}"
+        RUSTIC_AUDIT_MAX_AGE_HOURS: "{{ rustic_darwin_audit_max_age_hours }}"
+        PATH: "{{ rustic_darwin_path_env }}"
+        HOME: "{{ ansible_env.HOME }}"
+      register: rustic_darwin_audit_result
+      changed_when: false
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
+    - name: Report Rustic freshness audit evidence
+      ansible.builtin.debug:
+        msg: "{{ rustic_darwin_audit_result.stdout | from_json }}"
+      tags: [verify, operations_loop, rustic, rustic_verify, phase7]
+
 
     - name: Parse identity-bound Rustic repository snapshots
       no_log: true
@@ -118,10 +140,9 @@
         path: "{{ rustic_darwin_launchagents_dir }}/{{ item }}"
       loop: >-
         {{
-          ['com.auroraops.rustic-local.plist', rustic_darwin_launchd_cleanup_label ~ '.plist']
+          ['com.auroraops.rustic-local.plist', rustic_darwin_launchd_cleanup_label ~ '.plist', rustic_darwin_launchd_audit_label ~ '.plist']
           + (['com.auroraops.rustic-cloud.plist'] if (rustic_darwin_verify_cloud_remotes | length > 0) else [])
         }}
-      register: rustic_darwin_plist_files
       tags: [verify, operations_loop, rustic, rustic_verify, phase7]
 
     - name: Assert split Rustic LaunchAgent plist files exist
@@ -142,7 +163,7 @@
       failed_when: false
       loop: >-
         {{
-          ['com.auroraops.rustic-local', rustic_darwin_launchd_cleanup_label]
+          ['com.auroraops.rustic-local', rustic_darwin_launchd_cleanup_label, rustic_darwin_launchd_audit_label]
           + (['com.auroraops.rustic-cloud'] if (rustic_darwin_verify_cloud_remotes | length > 0) else [])
         }}
       tags: [verify, operations_loop, rustic, rustic_verify, phase7]

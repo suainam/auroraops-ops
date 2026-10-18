@@ -70,8 +70,11 @@ FORGET_TIMEOUT_SECONDS = int(os.getenv("RUSTIC_FORGET_TIMEOUT_SECONDS", "900"))
 CLEANUP_SUCCESS_MARKER = _resolve_path(
     os.getenv("RUSTIC_CLEANUP_SUCCESS_MARKER", "/var/lib/rustic/cleanup-success.json")
 )
-RESTORE_PROBE_DIR = _resolve_path(os.getenv("RUSTIC_RESTORE_PROBE_DIR", "/var/tmp"))
 RESTORE_PROBE_PATH = os.getenv("RUSTIC_RESTORE_PROBE_PATH", "/etc/ssh/sshd_config")
+# Daily freshness audit: every configured repository must have a snapshot newer
+# than the allowed age, otherwise the audit job exits non-zero for the scheduler.
+AUDIT_MARKER = _resolve_path(os.getenv("RUSTIC_AUDIT_MARKER", "/var/lib/rustic/audit.json"))
+AUDIT_MAX_AGE_HOURS = float(os.getenv("RUSTIC_AUDIT_MAX_AGE_HOURS", "26"))
 
 RETENTION = {
     "hourly": int(os.getenv("BACKUP_RETENTION_10MIN", "3")),
@@ -562,6 +565,74 @@ def inspect_all():
     return True
 
 
+def audit_all():
+    """Fail when any configured repository is stale or has no snapshot."""
+    now = datetime.now().astimezone()
+    repositories = []
+    all_fresh = True
+    for repo in repository_targets():
+        evidence = inspect_repo(repo)
+        if evidence is None:
+            all_fresh = False
+            repositories.append({"repository": repo, "fresh": False, "reason": "unreadable"})
+            continue
+        try:
+            latest = datetime.fromisoformat(
+                evidence["latest_snapshot_time"].replace("Z", "+00:00")
+            )
+        except (AttributeError, ValueError) as exc:
+            logger.error(f"Audit: unparseable snapshot time for {repo}: {exc}")
+            all_fresh = False
+            repositories.append(
+                {"repository": repo, "fresh": False, "reason": "invalid-snapshot-time"}
+            )
+            continue
+        if latest.tzinfo is None:
+            latest = latest.astimezone()
+        age_hours = (now - latest).total_seconds() / 3600.0
+        fresh = age_hours <= AUDIT_MAX_AGE_HOURS
+        if not fresh:
+            logger.error(
+                f"Audit: {repo} is stale: latest snapshot {age_hours:.1f}h old "
+                f"(limit {AUDIT_MAX_AGE_HOURS:.0f}h)"
+            )
+            all_fresh = False
+        repositories.append(
+            {
+                "repository": repo,
+                "fresh": fresh,
+                "latest_snapshot_id": evidence["latest_snapshot_id"],
+                "latest_snapshot_time": evidence["latest_snapshot_time"],
+                "age_hours": round(age_hours, 2),
+            }
+        )
+
+    payload = {
+        "schema": "auroraops.rustic-audit/v1",
+        "completed_at": now.isoformat(),
+        "max_age_hours": AUDIT_MAX_AGE_HOURS,
+        "fresh": all_fresh,
+        "repositories": repositories,
+    }
+    try:
+        marker_dir = os.path.dirname(AUDIT_MARKER) or "."
+        os.makedirs(marker_dir, mode=0o755, exist_ok=True)
+        temp_path = None
+        fd, temp_path = tempfile.mkstemp(prefix=".audit-", dir=marker_dir, text=True)
+        with os.fdopen(fd, "w", encoding="utf-8") as marker_file:
+            json.dump(payload, marker_file, sort_keys=True)
+            marker_file.write("\n")
+            marker_file.flush()
+            os.fsync(marker_file.fileno())
+        os.chmod(temp_path, 0o600)
+        os.replace(temp_path, AUDIT_MARKER)
+    except OSError as exc:
+        logger.error(f"Audit: failed to write {AUDIT_MARKER}: {exc}")
+        return False
+    print(json.dumps(payload, sort_keys=True))
+    return all_fresh
+
+
 def restore_probe():
     """Restore one known file from local backup into an ephemeral directory."""
     evidence = inspect_repo(LOCAL_PREFIX)
@@ -673,10 +744,11 @@ def main():
         "local": lambda: backup_all("local"),
         "cloud": lambda: backup_all("cloud"),
         "cleanup": prune_all,
+        "inspect": inspect_all,
+        "audit": audit_all,
+        "restore-probe": restore_probe,
         "check": check_all,
         "init": init_all,
-        "inspect": inspect_all,
-        "restore-probe": restore_probe,
     }
 
     if action == "capabilities":

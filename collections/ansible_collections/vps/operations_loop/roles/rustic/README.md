@@ -60,6 +60,10 @@ Rustic 角色提供企业级块级去重备份功能，支持本地+云端并行
 | `rustic_forget_timeout_seconds` | `900` | 每次 forget 的超时秒数 |
 | `rustic_lock_file` | `/run/lock/rustic-backup.lock` | 所有仓库操作共享锁 |
 | `rustic_lock_timeout` | `180` | 操作锁获取超时秒数（有界重试等待） |
+| `rustic_darwin_bin_candidates` | `[/opt/zerobrew/bin, /opt/homebrew/bin, /usr/local/bin, /usr/bin]` | Darwin 二进制探测顺序；第一个存在的目录被绑定为 rustic/rclone 路径 |
+| `rustic_darwin_audit_max_age_hours` | `26` | 每日审计允许的最新快照最大年龄（小时） |
+| `rustic_darwin_audit_hour` / `rustic_darwin_audit_minute` | `9` / `12` | 每日审计 LaunchAgent 触发时间 |
+| `rustic_darwin_audit_marker` | `{{ rustic_darwin_run_dir }}/audit.json` | 审计结果原子写入位置 |
 
 健康检查对每个仓库执行 `rustic check --read-data --read-data-subset 1%`，以适配当前 Rustic CLI，并将数据读取限定为 1%。
 
@@ -87,7 +91,18 @@ rustic-check.service         → 健康检查
 com.auroraops.rustic-local   → 触发本地备份 (StartCalendarInterval: :00, :20, :40)
 com.auroraops.rustic-cloud   → 触发云端备份 (StartCalendarInterval: 00/6:17)
 com.auroraops.rustic-cleanup → 触发定时清理 (StartCalendarInterval: 每小时 :45 分)
+com.auroraops.rustic-audit   → 每日新鲜度审计 (StartCalendarInterval: 09:12)，任一仓库最新快照超过 26h 即非零退出
 ```
+
+Darwin 二进制路径不硬编码 Homebrew：`tasks/resolve_darwin_binaries.yml` 依次探测
+`/opt/zerobrew/bin`、`/opt/homebrew/bin`、`/usr/local/bin`、`/usr/bin`，取第一个存在的目录绑定
+`rustic_darwin_bin_path`、`rustic_darwin_rclone_bin_path` 与 LaunchAgent 的 `PATH`。
+`rustic_darwin_bin_candidates` 覆盖探测顺序；已迁移到 zerobrew 的主机无需改任务。
+
+每日审计由 `rustic_backup.py audit` 执行：读取每个配置仓库的最新快照时间，与
+`rustic_darwin_audit_max_age_hours`（默认 26）比较，原子写出
+`{{ rustic_darwin_run_dir }}/audit.json`，任一仓库过期或不可读时返回非零，
+让 launchd 与健康检查观察到失败，而不是静默接受陈旧备份。
 
 两端统一使用 `rustic_backup.py` 进行生命周期管理，共享同一套锁机制与保留规则。
 四类操作都先获取 `/run/lock/rustic-backup.lock`。锁已被占用时本次运行返回 75，

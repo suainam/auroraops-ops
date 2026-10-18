@@ -1,17 +1,35 @@
 ---
-- name: Install Rustic and rclone via Homebrew
-  community.general.homebrew:
-    name:
-      - rustic
-      - rclone
-    state: present
+# Homebrew and zerobrew both installing rustic/rclone produced a
+# duplicate-formula-owner failure, so zerobrew owns the Darwin binaries.
+- name: List Zerobrew-installed formulas
+  ansible.builtin.command:
+    cmd: "{{ rustic_darwin_zb_bin }} list"
+  register: rustic_darwin_zb_list
+  changed_when: false
+  failed_when: false
+  check_mode: false
   tags: [deploy, operations_loop, rustic, rustic_install, phase7]
 
-- name: Resolve rclone and rustic binary paths on Darwin
-  ansible.builtin.set_fact:
-    rustic_darwin_bin_path: "{{ '/opt/homebrew/bin/rustic' if ansible_architecture == 'arm64' else '/usr/local/bin/rustic' }}"
-    rclone_darwin_bin_path: "{{ '/opt/homebrew/bin/rclone' if ansible_architecture == 'arm64' else '/usr/local/bin/rclone' }}"
-    rustic_bin_path: "{{ '/opt/homebrew/bin/rustic' if ansible_architecture == 'arm64' else '/usr/local/bin/rustic' }}"
+# `zb install` always reports "Installed" even when the packages are already
+# present, so gate the install on `zb list` to keep the role idempotent.
+- name: Install Rustic and rclone via Zerobrew
+  ansible.builtin.command:
+    cmd: "{{ rustic_darwin_zb_bin }} install rustic rclone"
+  register: rustic_darwin_zb_install
+  when: >-
+    rustic_darwin_zb_list.rc != 0
+    or rustic_darwin_zb_missing | length > 0
+  vars:
+    rustic_darwin_zb_installed: >-
+      {{ rustic_darwin_zb_list.stdout_lines
+         | map('regex_replace', '^(\S+).*$', '\1') | list }}
+    rustic_darwin_zb_missing: >-
+      {{ ['rustic', 'rclone'] | difference(rustic_darwin_zb_installed) }}
+  ignore_errors: "{{ ansible_check_mode }}"
+  tags: [deploy, operations_loop, rustic, rustic_install, phase7]
+
+- name: Resolve Darwin Rustic binary paths
+  ansible.builtin.import_tasks: resolve_darwin_binaries.yml
   tags: [deploy, operations_loop, rustic, rustic_install, phase7]
 
 - name: Create Application Support directories for Rustic
@@ -96,6 +114,30 @@
     dest: "{{ rustic_darwin_launchagents_dir }}/{{ rustic_darwin_launchd_cleanup_label }}.plist"
     mode: "0644"
   register: rustic_darwin_cleanup_plist
+  tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+- name: Deploy LaunchAgent plist for daily freshness audit
+  ansible.builtin.template:
+    src: rustic-audit.plist.j2
+    dest: "{{ rustic_darwin_launchagents_dir }}/{{ rustic_darwin_launchd_audit_label }}.plist"
+    mode: "0644"
+  register: rustic_darwin_audit_plist
+  tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+- name: Manage daily freshness audit LaunchAgent
+  community.general.launchd:
+    name: "{{ rustic_darwin_launchd_audit_label }}"
+    state: restarted
+  when:
+    - not ansible_check_mode
+    - rustic_darwin_audit_plist.changed
+  tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
+
+- name: Ensure daily freshness audit LaunchAgent is loaded
+  community.general.launchd:
+    name: "{{ rustic_darwin_launchd_audit_label }}"
+    state: started
+  when: not ansible_check_mode
   tags: [deploy, operations_loop, rustic, rustic_deploy, phase7]
 
 - name: Manage local backup LaunchAgent

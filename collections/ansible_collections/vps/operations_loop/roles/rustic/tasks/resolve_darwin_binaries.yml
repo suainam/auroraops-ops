@@ -1,0 +1,42 @@
+---
+# Resolve rustic/rclone from the first installed candidate directory.
+# zerobrew is listed first because the control hosts migrated off Homebrew;
+# Homebrew and the system dirs stay as fallbacks for hosts that still use them.
+- name: Probe Darwin Rustic binary candidate directories
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ rustic_darwin_bin_candidates }}"
+  register: rustic_darwin_bin_candidate_stats
+  changed_when: false
+  tags: [deploy, verify, rollback, operations_loop, rustic, rustic_preflight, phase7]
+
+- name: Resolve Darwin Rustic binary paths
+  ansible.builtin.set_fact:
+    rustic_darwin_bin_dir: >-
+      {{
+        (
+          rustic_darwin_bin_candidate_stats.results
+          | selectattr('stat.isdir')
+          | map(attribute='item')
+          | list
+          | first
+        ) | default(rustic_darwin_bin_candidates | last, true)
+      }}
+    rustic_darwin_path_env: >-
+      {{
+        (
+          (ansible_env.PATH | default('/usr/bin:/bin')).split(':')
+          + rustic_darwin_bin_candidates
+          + ['/usr/bin', '/bin']
+        ) | reject('equalto', '') | unique | join(':')
+      }}
+  changed_when: false
+  tags: [deploy, verify, rollback, operations_loop, rustic, rustic_preflight, phase7]
+
+- name: Bind Darwin Rustic binary paths to the resolved directory
+  ansible.builtin.set_fact:
+    rustic_darwin_bin_path: "{{ rustic_darwin_bin_dir }}/rustic"
+    rustic_darwin_rclone_bin_path: "{{ rustic_darwin_bin_dir }}/rclone"
+    rustic_bin_path: "{{ rustic_darwin_bin_dir }}/rustic"
+  changed_when: false
+  tags: [deploy, verify, rollback, operations_loop, rustic, rustic_preflight, phase7]

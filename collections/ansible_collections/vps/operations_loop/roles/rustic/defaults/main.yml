@@ -92,8 +92,24 @@ rustic_darwin_log_dir: "{{ rustic_darwin_support_dir }}/logs"
 rustic_darwin_run_dir: "{{ rustic_darwin_support_dir }}/run"
 rustic_darwin_tmp_dir: "{{ rustic_darwin_support_dir }}/tmp"
 rustic_bin_path: "rustic"
-rustic_darwin_bin_path: "{{ '/opt/homebrew/bin/rustic' if (ansible_architecture | default('arm64')) == 'arm64' else '/usr/local/bin/rustic' }}"
-rustic_darwin_rclone_bin_path: "{{ '/opt/homebrew/bin/rclone' if (ansible_architecture | default('arm64')) == 'arm64' else '/usr/local/bin/rclone' }}"
+# Zerobrew CLI entrypoint; it lives under the Homebrew prefix even when the
+# installed formulas live in /opt/zerobrew.
+rustic_darwin_zb_bin: "/opt/homebrew/bin/zb"
+# Probe order: zerobrew first (current installs), Homebrew and system dirs as fallbacks.
+rustic_darwin_bin_candidates:
+  - "/opt/zerobrew/bin"
+  - "/opt/homebrew/bin"
+  - "/usr/local/bin"
+  - "/usr/bin"
+# Resolved at runtime by tasks/resolve_darwin_binaries.yml; the value below is
+# only the pre-resolution default used by templates rendered before that task.
+rustic_darwin_bin_path: "{{ rustic_darwin_bin_candidates[0] }}/rustic"
+rustic_darwin_rclone_bin_path: "{{ rustic_darwin_bin_candidates[0] }}/rclone"
+rustic_darwin_audit_max_age_hours: 26
+rustic_darwin_audit_hour: 9
+rustic_darwin_audit_minute: 12
+rustic_darwin_launchd_audit_label: "com.auroraops.rustic-audit"
+rustic_darwin_audit_marker: "{{ rustic_darwin_run_dir }}/audit.json"
 rustic_darwin_rclone_config_path: "{{ ansible_env.HOME }}/.config/rclone/rclone.conf"
 rustic_darwin_launchd_local_label: "com.auroraops.rustic-local"
 rustic_darwin_launchd_cloud_label: "com.auroraops.rustic-cloud"

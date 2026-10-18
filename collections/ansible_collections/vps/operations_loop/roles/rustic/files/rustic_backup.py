@@ -96,7 +96,13 @@ def get_env():
     env["RUSTIC_PASSWORD"] = RUSTIC_PASSWORD
 
     current_path = env.get("PATH", "")
-    standard_dirs = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+    standard_dirs = [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+        "/opt/zerobrew/bin",
+    ]
     path_parts = [p for p in current_path.split(os.pathsep) if p]
     for d in standard_dirs:
         if d not in path_parts:

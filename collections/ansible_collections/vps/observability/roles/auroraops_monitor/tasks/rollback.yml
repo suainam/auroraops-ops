@@ -62,19 +62,16 @@
 
     lock_file="{{ auroraops_monitor_dir }}/spool.lock"
     touch "$lock_file"
-    exec 200<"$lock_file"
-    flock -x 200
 
-    if [ -d "{{ auroraops_monitor_dir }}/spool" ] && [ "$(ls -A {{ auroraops_monitor_dir }}/spool 2>/dev/null)" ]; then
-      cp -a {{ auroraops_monitor_dir }}/spool/* "$archive_dir/"
-    fi
-    if [ -f "{{ auroraops_monitor_dir }}/spool.jsonl" ] && [ -s "{{ auroraops_monitor_dir }}/spool.jsonl" ]; then
-      cp -a {{ auroraops_monitor_dir }}/spool.jsonl "$archive_dir/spool-preserved-$(date +%s).jsonl"
-    fi
-
-    # fsync target archive directory
-    python3 -c "import os; fd = os.open('$archive_dir', os.O_RDONLY); os.fsync(fd); os.close(fd)"
-    flock -u 200
+    flock -x "$lock_file" bash -c "
+      if [ -d '{{ auroraops_monitor_dir }}/spool' ] && [ \"\$(ls -A '{{ auroraops_monitor_dir }}/spool' 2>/dev/null)\" ]; then
+        cp -a '{{ auroraops_monitor_dir }}'/spool/* '$archive_dir/'
+      fi
+      if [ -f '{{ auroraops_monitor_dir }}/spool.jsonl' ] && [ -s '{{ auroraops_monitor_dir }}/spool.jsonl' ]; then
+        cp -a '{{ auroraops_monitor_dir }}/spool.jsonl' '$archive_dir/spool-preserved-\$(date +%s).jsonl'
+      fi
+      python3 -c \"import os; fd = os.open('$archive_dir', os.O_RDONLY); os.fsync(fd); os.close(fd)\"
+    "
   when:
     - auroraops_monitor_rollback_fact_stat.stat.exists
     - auroraops_monitor_unacked_check.stdout is defined

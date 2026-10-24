@@ -338,10 +338,20 @@ class Aggregator:
         last_ip = None
         last_region = None
 
-        for ev in sorted(geo_events_collected, key=lambda x: x.get("timestamp") or ""):
+        for ev in sorted(geo_events_collected, key=lambda x: parse_iso_utc(x.get("timestamp")) or datetime.min.replace(tzinfo=timezone.utc)):
+            ev_dt = parse_iso_utc(ev.get("timestamp"))
             ip = ev.get("current_ip")
             asn = ev.get("asn")
             region = ev.get("region")
+
+            if ev_dt and ev_dt < start_utc:
+                # Event is prior to window: establish baseline state only, don't count drift!
+                if ip:
+                    last_ip = ip
+                if region:
+                    last_region = region
+                continue
+
             if ip:
                 unique_ips.add(ip)
                 if last_ip and ip != last_ip:
@@ -364,7 +374,6 @@ class Aggregator:
                         "to_region": region,
                     })
                 last_region = region
-
         return {
             "status": "ok",
             "time_window": {"start_utc": start_utc.isoformat(), "end_utc": end_utc.isoformat()},
@@ -531,7 +540,8 @@ class Aggregator:
     def aggregate_cf_history_window(self, start_utc: datetime, end_utc: datetime) -> dict[str, Any]:
         """Aggregate CF server metrics strictly across the cumulative archive within the window."""
         # Run a collection tick to pull the freshest 24h
-        self.collect_cf_history_tick()
+        tick_res = self.collect_cf_history_tick()
+        collected_details = tick_res.get("details", {})
 
         worker_url = self.env.get("CF_WORKER_URL", os.environ.get("CF_WORKER_URL", "https://cf-server-monitor.suainam.workers.dev"))
         password = self.env.get("CF_ADMIN_PASSWORD", os.environ.get("CF_ADMIN_PASSWORD", ""))
@@ -570,27 +580,46 @@ class Aggregator:
                 except Exception:
                     pass
 
-            # Filter points in window
+            # Filter points in window and sort
             window_points = []
             for p in all_archived:
                 pts = parse_iso_utc(p.get("timestamp", ""))
                 if pts and start_utc <= pts <= end_utc:
                     window_points.append(p)
+            window_points.sort(key=lambda x: parse_iso_utc(x.get("timestamp")) or datetime.min.replace(tzinfo=timezone.utc))
 
-            # Online detection: last_updated within 2h
-            lu_str = srv.get("last_updated")
-            lu_dt = parse_iso_utc(lu_str) if lu_str else None
-            is_online = bool(lu_dt and (now - lu_dt).total_seconds() < 7200)
-
-            # Coverage classification
+            # Coverage calculation based on time span and max gap
             cnt = len(window_points)
-            if cnt >= 300:
-                cov = "full"
-            elif cnt > 0:
-                cov = "partial"
-            else:
-                cov = "none"
+            time_span_hours = 0.0
+            max_gap_hours = None
+            cov = "none"
 
+            if cnt >= 2:
+                t0 = parse_iso_utc(window_points[0].get("timestamp"))
+                t1 = parse_iso_utc(window_points[-1].get("timestamp"))
+                if t0 and t1:
+                    time_span_hours = round((t1 - t0).total_seconds() / 3600.0, 1)
+
+                max_gap_sec = 0.0
+                prev_t = t0
+                for pt in window_points[1:]:
+                    cur_t = parse_iso_utc(pt.get("timestamp"))
+                    if cur_t and prev_t:
+                        gap = (cur_t - prev_t).total_seconds()
+                        if gap > max_gap_sec:
+                            max_gap_sec = gap
+                        prev_t = cur_t
+                max_gap_hours = round(max_gap_sec / 3600.0, 1)
+
+                if time_span_hours >= 156.0 and max_gap_hours <= 6.0:
+                    cov = "full"
+                else:
+                    cov = "partial"
+            elif cnt == 1:
+                cov = "partial"
+
+            srv_detail = collected_details.get(sname, {})
+            fetch_status = srv_detail.get("fetch_status", "ok" if is_online else "unprobed")
             if cnt > 0:
                 cpu_vals = [float(p["cpu"]) for p in window_points if "cpu" in p and p["cpu"] is not None]
                 ram_vals = []
@@ -627,7 +656,10 @@ class Aggregator:
                 "id": sid,
                 "online": is_online,
                 "last_updated_utc": lu_str,
+                "fetch_status": fetch_status,
                 "coverage": cov,
+                "time_span_hours": time_span_hours,
+                "max_gap_hours": max_gap_hours,
                 "window_points_count": cnt,
                 "total_archived_points": len(all_archived),
                 "cpu_avg_pct": cpu_avg,

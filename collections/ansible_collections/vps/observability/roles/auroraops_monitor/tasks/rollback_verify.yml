@@ -47,7 +47,8 @@
         assert os.path.isdir(monitor_dir), f"Directory {monitor_dir} should exist but does not"
         if "mode" in dir_meta:
             curr_mode = oct(stat.S_IMODE(os.stat(monitor_dir).st_mode))
-            assert curr_mode == dir_meta["mode"], f"Mode mismatch on {monitor_dir}: {curr_mode} vs {dir_meta[\"mode\"]}"
+            expected_dir_mode = dir_meta.get("mode")
+            assert curr_mode == expected_dir_mode, f"Mode mismatch on {monitor_dir}: {curr_mode} vs {expected_dir_mode}"
 
         if files_manifest:
             for s in scripts:
@@ -57,7 +58,8 @@
                     assert os.path.isfile(target), f"Script {target} was pre-existing but is absent"
                     if "mode" in info:
                         curr_mode = oct(stat.S_IMODE(os.stat(target).st_mode))
-                        assert curr_mode == info["mode"], f"Mode mismatch on {target}: {curr_mode} vs {info[\"mode\"]}"
+                        expected_script_mode = info.get("mode")
+                        assert curr_mode == expected_script_mode, f"Mode mismatch on {target}: {curr_mode} vs {expected_script_mode}"
                 else:
                     assert not os.path.lexists(target), f"Script {target} was newly deployed and should be absent"
 

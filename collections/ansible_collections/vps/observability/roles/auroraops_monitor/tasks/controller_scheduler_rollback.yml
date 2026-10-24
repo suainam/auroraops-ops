@@ -52,9 +52,6 @@
             shutil.copy2(src_plist, plist_path)
             if "mode" in plist_info:
                 os.chmod(plist_path, int(plist_info["mode"], 8))
-            if plist_info.get("loaded", False):
-                subprocess.run(["launchctl", "unload", plist_path], capture_output=True)
-                subprocess.run(["launchctl", "load", "-w", plist_path], check=True)
     else:
         if os.path.lexists(plist_path):
             os.remove(plist_path)
@@ -72,6 +69,10 @@
             if os.path.lexists(sp):
                 os.remove(sp)
 
+    # Load old job only after all plists and scripts are fully restored on disk
+    if plist_info.get("pre_exists", False) and plist_info.get("loaded", False):
+        subprocess.run(["launchctl", "unload", plist_path], capture_output=True)
+        subprocess.run(["launchctl", "load", "-w", plist_path], check=True)
     if os.path.exists(baseline_file):
         os.remove(baseline_file)
     if os.path.exists(backup_dir):

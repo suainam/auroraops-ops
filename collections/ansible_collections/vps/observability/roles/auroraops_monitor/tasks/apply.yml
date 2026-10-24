@@ -445,6 +445,7 @@
       CF_ADMIN_PASSWORD={{ vault_opcotoai_smtp_freemail_worker_admin_pwd | default('') }}
       CF_WORKER_URL={{ cf_probe_worker_url | default('https://cf-server-monitor.suainam.workers.dev') }}
       TYPESAFE_API_KEY={{ auroraops_monitor_magpie_typesafe_key.stdout | default('') }}
+      NOTIFY_API_KEY={{ health_checks_notify1_api_key | default('') }}
   when: auroraops_monitor_mode == 'aggregator'
   tags: [deploy, observability, auroraops_monitor]
 

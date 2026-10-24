@@ -34,10 +34,49 @@ USER_AGENT = "AuroraOps-Monitor/1.0"
 SYSTEMONE_URL = "https://api.typesafe.ai/v1/systemone"
 DEFAULT_JEV_MODEL = "jev-latest"
 MIN_JEV_CONFIDENCE = 0.60
+PUSH_ENDPOINT = "https://moe.saui.dpdns.org/api/push"
 
 DEFAULT_BASE_DIR = Path("/var/lib/auroraops-monitor")
 DEFAULT_ENV_FILE = Path("/etc/auroraops/auroraops_monitor.env")
 DEFAULT_MAGPIE_PROVIDERS = Path("/opt/dockers/magpie/config/magpie/providers.json")
+
+
+def escape_markdown_v2(text: str) -> str:
+    """Semantic replacement of Telegram MarkdownV2 reserved chars (no backslash)."""
+    if not isinstance(text, str):
+        text = str(text)
+    replacements = {
+        ".": "․", "_": "ˍ", "[": "［", "]": "］",
+        "(": "（", ")": "）", "!": "！", "-": "－",
+        "=": "＝", "+": "＋", "|": "｜", "*": "＊",
+        "~": "～", "`": "＇", ">": "＞", "#": "＃",
+        "{": "｛", "}": "｝",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text
+
+
+def push_weekly_report(api_key: str, md_text: str, title: str) -> dict:
+    """Push weekly report markdown to the Moe notify endpoint."""
+    if not api_key:
+        return {"status": "skipped", "reason": "no api_key"}
+    endpoint = f"{PUSH_ENDPOINT}/{api_key}"
+    payload = {
+        "title": escape_markdown_v2(title),
+        "content": escape_markdown_v2(md_text),
+    }
+    req = urllib.request.Request(
+        endpoint,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return {"status": "sent", "http": resp.status}
+    except Exception as e:
+        return {"status": "failed", "error": str(e)}
 
 
 def load_env_file(env_path: Path) -> dict[str, str]:
@@ -1061,6 +1100,21 @@ def main() -> None:
     elif args.report_all:
         paths = aggregator.generate_weekly_report(days=args.days)
         print(json.dumps(paths, indent=2))
+        # Deliver the weekly report to the Moe notify endpoint (same channel as
+        # health_checks heartbeat). Non-fatal: a push failure never fails the
+        # report generation or the systemd unit.
+        api_key = os.environ.get("NOTIFY_API_KEY", aggregator.env.get("NOTIFY_API_KEY", ""))
+        if api_key:
+            try:
+                md_text = Path(paths["latest_md"]).read_text(encoding="utf-8")
+            except OSError as e:
+                md_text = ""
+                print(f"[push] warning: cannot read report: {e}")
+            if md_text:
+                title = f"AuroraOps 周报 {paths['iso_week']}"
+                push_weekly_report(api_key, md_text, title)
+        else:
+            print("[push] skipped: NOTIFY_API_KEY not set")
     else:
         print("Specify --report-all or --collect-cf")
 

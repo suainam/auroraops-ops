@@ -35,7 +35,7 @@ controller_timer_script: "instabox_scheduler_tick.sh"      # 控制端调度脚�
 controller_timer_interval: 14400                           # 控制端调度周期（秒）
 ```
 
-敏感凭据（Cloudflare 管理口令、TypeSafe provider key）来自 Ansible Vault，渲染到目标机 `/etc/auroraops/auroraops_monitor.env`，权限 `0600`。
+敏感凭据（Cloudflare 管理口令、TypeSafe provider key、周报推送 key）来自 Ansible Vault，渲染到目标机 `/etc/auroraops/auroraops_monitor.env`，权限 `0600`。
 
 ## 内部逻辑
 
@@ -45,6 +45,7 @@ controller_timer_interval: 14400                           # 控制端调度周�
 - geo 日志游标按事件自身 UTC 时间戳推进：窗口前合法事件作为基线，非法时间与未来事件不计入。
 - 汇总指标由纯 Python 计算，模型输出不参与数值统计。Jev 裁决受双置信度门控，低于门槛时显式标记待复核。
 - 回滚先停控制端调度，再持锁归档未确认数据；基线备份逐文件记录 `exists`、`mode`、`uid`、`gid` 与 systemd 原启用状态。
+- 周报生成后自动推送 `weekly_report_latest.md` 至 Moe 通知端点（与 health_checks 心跳同通道）。推送失败仅记录、不阻断周报生成（非致命）。
 
 ## 依赖
 
@@ -52,6 +53,7 @@ controller_timer_interval: 14400                           # 控制端调度周�
 - 依赖 `vps.ops.ipquality` 提供的 `ipquality_geo_probe.py` 作为地域判定的权威来源，角色不复制该实现。
 - 依赖 `vps.common.tasks.managed_timer` 的 Darwin 分支，该分支需要 `auroraops-base` 提交 `26e81e7` 之后的版本。
 - `aggregator` 模式依赖 Cloudflare Server Monitor 私有站点管理凭据与 cc15 本机 Magpie 的 `typesafe` provider。
+- 周报推送复用 `health_checks_notify1_api_key`（Moe 通知通道），未配置时跳过推送不影响周报生成。
 
 ## 维护与排查
 
@@ -62,3 +64,4 @@ controller_timer_interval: 14400                           # 控制端调度周�
 - 排查拉取被拒：确认远端存在 `auroraops-monitor` 无特权用户，且控制端私钥 `~/.auroraops/keys/` 权限为 `0600`。
 - 排查 ACK 未生效：核对控制端归档目录 `~/.auroraops/controller_spool/` 中文件是否持久落盘，摘要不一致时远端保留原文件。
 - 排查周报待复核：查看 `weekly_report_latest.json` 中 `jev` 字段，置信度低于门槛时保留原始回答供人工判断。
+- 排查周报推送失败：确认 `auroraops_monitor.env` 中 `NOTIFY_API_KEY` 已配置，且 `https://moe.saui.dpdns.org/api/push` 可达；推送失败不影响周报文件生成。

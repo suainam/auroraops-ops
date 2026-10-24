@@ -68,7 +68,7 @@
     ]
     os.makedirs(backup_dir, exist_ok=True)
     os.chmod(backup_dir, 0o700)
-
+    files_meta = {}
     for name in scripts:
         p = os.path.join(monitor_dir, name)
         meta = get_meta(p)

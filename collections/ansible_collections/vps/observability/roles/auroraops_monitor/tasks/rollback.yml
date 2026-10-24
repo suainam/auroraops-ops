@@ -53,22 +53,6 @@
   when: auroraops_monitor_mode == 'host_metrics'
   tags: [rollback, observability, auroraops_monitor]
 
-- name: 移除专用非特权系统用户 (qqg1299)
-  become: true
-  ansible.builtin.user:
-    name: "{{ auroraops_monitor_user }}"
-    state: absent
-    remove: false
-  when: auroraops_monitor_mode == 'host_metrics'
-  tags: [rollback, observability, auroraops_monitor]
-
-- name: 移除专用非特权系统组 (qqg1299)
-  become: true
-  ansible.builtin.group:
-    name: "{{ auroraops_monitor_group }}"
-    state: absent
-  when: auroraops_monitor_mode == 'host_metrics'
-  tags: [rollback, observability, auroraops_monitor]
 
 - name: 检查 Baseline Fact 是否存在
   become: true
@@ -122,7 +106,7 @@
     archive_dir="{{ auroraops_monitor_unacked_archive_dir }}"
     mkdir -p "$archive_dir"
     chmod 700 "$archive_dir"
-    chown {{ auroraops_monitor_user }}:{{ auroraops_monitor_group }} "$archive_dir"
+    chown root:root "$archive_dir"
 
     lock_file="{{ auroraops_monitor_dir }}/spool.lock"
     touch "$lock_file"
@@ -275,4 +259,23 @@
     path: "{{ auroraops_monitor_fact_path }}"
     state: absent
   when: auroraops_monitor_rollback_fact_stat.stat.exists
+  tags: [rollback, observability, auroraops_monitor]
+
+- name: 移除专用非特权系统用户 (qqg1299)
+  become: true
+  ansible.builtin.user:
+    name: "{{ auroraops_monitor_user }}"
+    state: absent
+    remove: false
+  failed_when: false
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [rollback, observability, auroraops_monitor]
+
+- name: 移除专用非特权系统组 (qqg1299)
+  become: true
+  ansible.builtin.group:
+    name: "{{ auroraops_monitor_group }}"
+    state: absent
+  failed_when: false
+  when: auroraops_monitor_mode == 'host_metrics'
   tags: [rollback, observability, auroraops_monitor]

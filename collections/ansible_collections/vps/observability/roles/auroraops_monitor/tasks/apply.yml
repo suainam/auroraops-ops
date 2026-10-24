@@ -204,7 +204,7 @@
   ansible.builtin.shell: |
     set -euo pipefail
     python3 -c '
-    import os, sys, json, shutil, fcntl, pwd, grp
+    import os, sys, json, shutil, fcntl, pwd, grp, hashlib
 
     archive_dir = sys.argv[1]
     monitor_dir = sys.argv[2]
@@ -214,6 +214,30 @@
 
     if not os.path.exists(archive_dir):
         sys.exit(0)
+
+    def durable_copy_file(src, dst):
+        dst_dir = os.path.dirname(dst)
+        os.makedirs(dst_dir, exist_ok=True)
+        tmp_dst = dst + f".tmp.{os.getpid()}"
+        h_src = hashlib.sha256()
+        h_dst = hashlib.sha256()
+        with open(src, "rb") as f_in, open(tmp_dst, "wb") as f_out:
+            while chunk := f_in.read(65536):
+                h_src.update(chunk)
+                f_out.write(chunk)
+                h_dst.update(chunk)
+            f_out.flush()
+            os.fsync(f_out.fileno())
+        if h_src.digest() != h_dst.digest():
+            if os.path.exists(tmp_dst):
+                os.remove(tmp_dst)
+            raise IOError(f"SHA256 mismatch copying {src} -> {dst}")
+        os.replace(tmp_dst, dst)
+        dfd = os.open(dst_dir, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
 
     os.makedirs(os.path.dirname(lock_file), exist_ok=True)
     with open(lock_file, "a") as lf:
@@ -229,24 +253,18 @@
                         continue
                     arch_file = os.path.join(arch_cf, fname)
                     target_file = os.path.join(target_cf, fname)
-                    arch_points = []
-                    try:
-                        with open(arch_file, "r", encoding="utf-8") as af:
-                            d = json.load(af)
-                            if isinstance(d, list):
-                                arch_points = d
-                    except Exception:
-                        pass
+                    with open(arch_file, "r", encoding="utf-8") as af:
+                        d = json.load(af)
+                        if not isinstance(d, list):
+                            raise ValueError(f"Archive file {arch_file} is not a valid JSON list")
+                        arch_points = d
 
                     target_points = []
                     if os.path.exists(target_file):
-                        try:
-                            with open(target_file, "r", encoding="utf-8") as tf:
-                                d = json.load(tf)
-                                if isinstance(d, list):
-                                    target_points = d
-                        except Exception:
-                            pass
+                        with open(target_file, "r", encoding="utf-8") as tf:
+                            d = json.load(tf)
+                            if isinstance(d, list):
+                                target_points = d
 
                     merged_map = {}
                     for p in arch_points:
@@ -266,8 +284,10 @@
                         os.fsync(tf.fileno())
                     os.replace(tmp_tf, target_file)
                     dfd = os.open(target_cf, os.O_RDONLY)
-                    os.fsync(dfd)
-                    os.close(dfd)
+                    try:
+                        os.fsync(dfd)
+                    finally:
+                        os.close(dfd)
 
             # 2. Restore/merge spool_inbound
             arch_ib = os.path.join(archive_dir, "spool_inbound")
@@ -284,7 +304,7 @@
                             sf = os.path.join(src_sub, f)
                             df = os.path.join(dst_sub, f)
                             if not os.path.exists(df):
-                                shutil.copy2(sf, df)
+                                durable_copy_file(sf, df)
                             else:
                                 seen_keys = set()
                                 lines = []
@@ -304,7 +324,7 @@
                                         l = line.strip()
                                         if l:
                                             try:
-                                                rec = json.loads(l)
+                                                 rec = json.loads(l)
                                                 k = rec.get("run_id") or rec.get("timestamp_utc") or l
                                                 if k not in seen_keys:
                                                     seen_keys.add(k)
@@ -318,6 +338,11 @@
                                     out_f.flush()
                                     os.fsync(out_f.fileno())
                                 os.replace(tmp_df, df)
+                                dfd = os.open(dst_sub, os.O_RDONLY)
+                                try:
+                                    os.fsync(dfd)
+                                finally:
+                                    os.close(dfd)
 
             # 3. Restore/merge spool
             arch_spool = os.path.join(archive_dir, "spool")
@@ -329,7 +354,7 @@
                         sf = os.path.join(arch_spool, f)
                         df = os.path.join(target_spool, f)
                         if not os.path.exists(df):
-                            shutil.copy2(sf, df)
+                            durable_copy_file(sf, df)
 
             # 4. Restore preserved active spool
             for f in os.listdir(archive_dir):
@@ -339,7 +364,7 @@
                     os.makedirs(target_spool_dir, exist_ok=True)
                     df = os.path.join(target_spool_dir, f)
                     if not os.path.exists(df):
-                        shutil.copy2(sf, df)
+                        durable_copy_file(sf, df)
 
             # 5. Restore reports
             arch_rep = os.path.join(archive_dir, "reports")
@@ -351,22 +376,19 @@
                         sf = os.path.join(arch_rep, f)
                         df = os.path.join(target_rep, f)
                         if not os.path.exists(df):
-                            shutil.copy2(sf, df)
+                            durable_copy_file(sf, df)
 
-            # Clean archive_dir now that recovery is complete and confirmed
+            # Ensure correct ownership BEFORE removing archive
+            uid = pwd.getpwnam(user).pw_uid
+            gid = grp.getgrnam(group).gr_gid
+            for root, dirs, files in os.walk(monitor_dir):
+                for d in dirs:
+                    os.chown(os.path.join(root, d), uid, gid)
+                for f in files:
+                    os.chown(os.path.join(root, f), uid, gid)
+
+            # Clean archive_dir only now that all fsync and ownership confirmations succeeded
             shutil.rmtree(archive_dir)
-
-            # Ensure correct ownership
-            try:
-                uid = pwd.getpwnam(user).pw_uid
-                gid = grp.getgrnam(group).gr_gid
-                for root, dirs, files in os.walk(monitor_dir):
-                    for d in dirs:
-                        os.chown(os.path.join(root, d), uid, gid)
-                    for f in files:
-                        os.chown(os.path.join(root, f), uid, gid)
-            except Exception:
-                pass
         finally:
             fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
     ' "{{ auroraops_monitor_unacked_archive_dir }}" "{{ auroraops_monitor_dir }}" "{{ auroraops_monitor_lock_file }}" "{{ auroraops_monitor_user }}" "{{ auroraops_monitor_group }}"

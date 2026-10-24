@@ -348,19 +348,13 @@
                 if "mode" in sf_meta:
                     os.chmod(sf_path, int(sf_meta["mode"], 8))
                 if "uid" in sf_meta and "gid" in sf_meta:
-                    try:
-                        os.chown(sf_path, sf_meta["uid"], sf_meta["gid"])
-                    except Exception:
-                        pass
+                    os.chown(sf_path, sf_meta["uid"], sf_meta["gid"])
             else:
                 if os.path.lexists(sf_path):
                     os.remove(sf_path)
 
         # Reload systemd daemon after file restoration
-        try:
-            subprocess.run(["systemctl", "daemon-reload"], check=True)
-        except Exception:
-            pass
+        subprocess.run(["systemctl", "daemon-reload"], check=True)
 
         # Restore original unit enabled and active states
         for sf_path, sf_meta in system_files.items():
@@ -368,13 +362,13 @@
                 uname = os.path.basename(sf_path)
                 if sf_meta.get("pre_exists", False):
                     if sf_meta.get("enabled", False):
-                        subprocess.run(["systemctl", "enable", uname], capture_output=True)
+                        subprocess.run(["systemctl", "enable", uname], check=True)
                     else:
-                        subprocess.run(["systemctl", "disable", uname], capture_output=True)
+                        subprocess.run(["systemctl", "disable", uname], check=True)
                     if sf_meta.get("active", False):
-                        subprocess.run(["systemctl", "start", uname], capture_output=True)
+                        subprocess.run(["systemctl", "start", uname], check=True)
                     else:
-                        subprocess.run(["systemctl", "stop", uname], capture_output=True)
+                        subprocess.run(["systemctl", "stop", uname], check=True)
         spool_path = os.path.join(monitor_dir, "spool")
         if spool_dir_meta.get("exists", False):
             if "mode" in spool_dir_meta:

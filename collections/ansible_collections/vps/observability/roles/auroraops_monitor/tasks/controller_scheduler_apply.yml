@@ -117,11 +117,7 @@
     src: "{{ role_path }}/files/{{ item }}"
     dest: "{{ lookup('env', 'HOME') }}/.auroraops/bin/{{ item }}"
     mode: "0755"
-  loop:
-    - instabox_scheduler_tick.sh
-    - instabox_scheduler_tick.py
-    - qqg1299_spool_puller.sh
-    - cc15_spool_pusher.py
+  loop: "{{ [controller_timer_script, 'instabox_scheduler_tick.py'] if controller_timer_script == 'instabox_scheduler_tick.sh' else [controller_timer_script] }}"
   tags: [deploy, observability, auroraops_monitor]
 
 - name: 调用通用 managed_timer 管理控制端 LaunchAgent (Darwin Controller)

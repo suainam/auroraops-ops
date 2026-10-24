@@ -125,6 +125,7 @@
     owner: "{{ auroraops_monitor_user }}"
     group: "{{ auroraops_monitor_group }}"
     mode: "0755"
+    recurse: yes
   loop:
     - "{{ auroraops_monitor_dir }}"
     - "{{ auroraops_monitor_spool_dir }}"

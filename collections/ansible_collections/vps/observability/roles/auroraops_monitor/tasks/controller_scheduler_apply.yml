@@ -29,7 +29,6 @@
   tags: [deploy, observability, auroraops_monitor]
 
 - name: 调用通用 managed_timer 管理控制端 LaunchAgent (Darwin Controller)
-  delegate_to: localhost
   ansible.builtin.include_tasks:
     file: "{{ role_path }}/../../../common/tasks/managed_timer.yml"
   vars:
@@ -41,6 +40,7 @@
       - "{{ lookup('env', 'HOME') }}/.auroraops/bin/instabox_scheduler_tick.sh"
     timer_interval_seconds: 14400
     timer_log_dir: "{{ lookup('env', 'HOME') }}/Library/Logs/AuroraOps"
+    timer_init_system: "darwin"
     timer_enabled: true
     timer_state: started
   tags: [deploy, observability, auroraops_monitor]

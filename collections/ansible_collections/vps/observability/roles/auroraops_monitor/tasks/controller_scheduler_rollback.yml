@@ -2,12 +2,12 @@
 # Controller LaunchAgent rollback via universal managed_timer task library
 
 - name: 调用通用 managed_timer 卸载并清理控制端 LaunchAgent (Darwin Controller)
-  delegate_to: localhost
   ansible.builtin.include_tasks:
     file: "{{ role_path }}/../../../common/tasks/managed_timer.yml"
   vars:
     timer_name: "com.auroraops.instabox-scheduler"
     timer_exec_start: "{{ lookup('env', 'HOME') }}/.auroraops/bin/instabox_scheduler_tick.sh"
+    timer_init_system: "darwin"
     timer_enabled: false
     timer_state: stopped
   tags: [rollback, observability, auroraops_monitor]

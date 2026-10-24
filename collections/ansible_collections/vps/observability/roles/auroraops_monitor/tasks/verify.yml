@@ -70,7 +70,7 @@
   become: true
   become_user: "{{ auroraops_monitor_user }}"
   ansible.builtin.command:
-    cmd: >-
+    cmd: |
       python3 -c "
       import json, sys
       with open('{{ auroraops_monitor_spool_file }}', 'r', encoding='utf-8') as f:

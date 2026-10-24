@@ -305,9 +305,7 @@
                     sdir = os.path.join(monitor_dir, sub)
                     if os.path.isdir(sdir) and os.listdir(sdir):
                         dest = os.path.join(archive_dir, sub)
-                        os.makedirs(dest, exist_ok=True)
-                        for item in os.listdir(sdir):
-                            shutil.copy2(os.path.join(sdir, item), os.path.join(dest, item))
+                        shutil.copytree(sdir, dest, dirs_exist_ok=True)
             if os.path.exists(monitor_dir):
                 shutil.rmtree(monitor_dir)
     else:

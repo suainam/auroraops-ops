@@ -60,6 +60,10 @@
   failed_when: auroraops_monitor_orphan_proc.rc == 0
   tags: [rollback_verify, observability, auroraops_monitor]
 
+- name: 验证控制端 LaunchAgent 回滚终态 (Darwin Controller)
+  ansible.builtin.include_tasks: controller_scheduler_rollback_verify.yml
+  tags: [rollback_verify, observability, auroraops_monitor]
+
 - name: 回滚验证终态合规输出
   ansible.builtin.debug:
     msg: "Rollback Verify PASSED: Zero orphan processes, monitor dir absent, /data assets intact."

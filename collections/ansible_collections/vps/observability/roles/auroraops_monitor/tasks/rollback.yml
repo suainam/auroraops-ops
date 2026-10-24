@@ -51,7 +51,7 @@
   become: true
   ansible.builtin.shell: |
     set -e
-    archive_dir="/data/home/auroraops-monitor-unacked-archive"
+    archive_dir="/data/auroraops-monitor-unacked-archive"
     mkdir -p "$archive_dir"
     chmod 700 "$archive_dir"
     chown {{ auroraops_monitor_user }}:{{ auroraops_monitor_group }} "$archive_dir"
@@ -96,4 +96,8 @@
     path: "{{ auroraops_monitor_fact_path }}"
     state: absent
   when: auroraops_monitor_rollback_fact_stat.stat.exists
+  tags: [rollback, observability, auroraops_monitor]
+
+- name: 回滚控制端 LaunchAgent 调度器 (Darwin Controller)
+  ansible.builtin.include_tasks: controller_scheduler_rollback.yml
   tags: [rollback, observability, auroraops_monitor]

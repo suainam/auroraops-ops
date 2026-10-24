@@ -1,0 +1,29 @@
+---
+- name: 验证控制端 LaunchAgent plist 已移除
+  delegate_to: localhost
+  ansible.builtin.stat:
+    path: "{{ lookup('env', 'HOME') }}/Library/LaunchAgents/com.auroraops.instabox-scheduler.plist"
+  register: auroraops_monitor_controller_rb_plist_stat
+  tags: [rollback_verify, observability, auroraops_monitor]
+
+- name: 断言控制端 LaunchAgent plist 已移除
+  ansible.builtin.assert:
+    that:
+      - not auroraops_monitor_controller_rb_plist_stat.stat.exists
+    fail_msg: "控制端 LaunchAgent plist 回滚残留"
+  tags: [rollback_verify, observability, auroraops_monitor]
+
+- name: 验证控制端 LaunchAgent 已从 launchd 卸载
+  delegate_to: localhost
+  ansible.builtin.command:
+    cmd: launchctl list
+  register: auroraops_monitor_rb_launchctl_list
+  changed_when: false
+  tags: [rollback_verify, observability, auroraops_monitor]
+
+- name: 断言控制端 LaunchAgent 已不再处于加载状态
+  ansible.builtin.assert:
+    that:
+      - "'com.auroraops.instabox-scheduler' not in auroraops_monitor_rb_launchctl_list.stdout"
+    fail_msg: "com.auroraops.instabox-scheduler 仍残留于 launchctl list"
+  tags: [rollback_verify, observability, auroraops_monitor]

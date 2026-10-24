@@ -122,6 +122,10 @@
   failed_when: auroraops_monitor_schema_val.rc != 0
   tags: [verify, observability, auroraops_monitor]
 
+
+- name: 验证控制端 LaunchAgent 状态 (Darwin Controller)
+  ansible.builtin.include_tasks: controller_scheduler_verify.yml
+  tags: [verify, observability, auroraops_monitor]
 - name: 验证结果摘要
   ansible.builtin.debug:
     msg: "Verify SUCCESS: Fact present, {{ auroraops_monitor_schema_val.stdout }}"

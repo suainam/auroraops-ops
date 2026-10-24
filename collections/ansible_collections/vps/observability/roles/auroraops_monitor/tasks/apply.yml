@@ -60,14 +60,19 @@
     group: "{{ auroraops_monitor_group }}"
     mode: "0755"
   tags: [deploy, observability, auroraops_monitor]
-- name: 部署 ipquality_geo_probe.py 依赖库
+- name: 部署 ipquality_geo_probe.py 依赖库 (复用 ops.ipquality 权威源)
   become: true
   ansible.builtin.copy:
-    src: ipquality_geo_probe.py
+    src: "{{ role_path }}/../../../ops/roles/ipquality/files/ipquality_geo_probe.py"
     dest: "{{ auroraops_monitor_dir }}/ipquality_geo_probe.py"
     owner: "{{ auroraops_monitor_user }}"
     group: "{{ auroraops_monitor_group }}"
     mode: "0755"
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 纳入控制端 LaunchAgent 跨平台定时调度管理 (Darwin Controller)
+  ansible.builtin.include_tasks: controller_scheduler_apply.yml
+  when: not ansible_check_mode
   tags: [deploy, observability, auroraops_monitor]
 
 

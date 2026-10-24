@@ -40,10 +40,22 @@ if tokens == ["true"]:
 # 2. Spool management commands
 if tokens[0] == "python3" and any("spool_manager.py" in t for t in tokens):
     if "seal" in tokens:
-        os.execv(
+        cmd = [
             "/usr/bin/python3",
-            ["python3", "/var/lib/auroraops-monitor/spool_manager.py", "--base-dir", "/var/lib/auroraops-monitor", "seal"],
-        )
+            "/var/lib/auroraops-monitor/spool_manager.py",
+            "--base-dir",
+            "/var/lib/auroraops-monitor",
+            "seal",
+        ]
+        if "--older-than" in tokens:
+            try:
+                ot_idx = tokens.index("--older-than")
+                older_than_val = float(tokens[ot_idx + 1])
+                cmd.extend(["--older-than", str(older_than_val)])
+            except Exception:
+                sys.stderr.write("Access denied: invalid --older-than argument\n")
+                sys.exit(1)
+        os.execv("/usr/bin/python3", cmd)
     elif "list" in tokens:
         os.execv(
             "/usr/bin/python3",
@@ -74,14 +86,20 @@ if tokens[0] == "python3" and any("spool_manager.py" in t for t in tokens):
         sys.stderr.write("Access denied: invalid ack arguments\n")
         sys.exit(1)
 
-# 3. SCP transfer for sealed files
+# 3. SCP transfer for sealed files (strictly single target file, fixed safe argv)
 if tokens[0] == "scp":
     if "-f" in tokens:
-        target = tokens[-1]
-        if ALLOWED_SEALED_RE.match(target):
-            os.execv("/usr/bin/scp", tokens)
-    sys.stderr.write(f"Access denied: SCP path not permitted: '{tokens[-1]}'\n")
+        f_idx = tokens.index("-f")
+        # -f must be the second-to-last token; final token must be the sole target file
+        if f_idx == len(tokens) - 2:
+            target = tokens[-1]
+            allowed_flags = {"scp", "-f", "-d", "-v", "-q"}
+            if all(t in allowed_flags for t in tokens[:-1]) and ALLOWED_SEALED_RE.match(target):
+                safe_scp_argv = ["/usr/bin/scp", "-f", target]
+                if "-d" in tokens:
+                    safe_scp_argv.insert(1, "-d")
+                os.execv("/usr/bin/scp", safe_scp_argv)
+    sys.stderr.write("Access denied: SCP path or arguments not permitted\n")
     sys.exit(1)
-
 sys.stderr.write(f"Access denied: unauthorized command '{tokens[0]}'\n")
 sys.exit(1)

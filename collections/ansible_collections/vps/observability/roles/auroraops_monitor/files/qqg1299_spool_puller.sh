@@ -8,6 +8,7 @@ ARGS=(
     "--remote-dir" "/var/lib/auroraops-monitor"
     "--pull-only"
     "--seal"
+    "--seal-min-age" "900"
 )
 if [ -f "$PULLER_KEY" ]; then
     ARGS+=("--ssh-identity" "$PULLER_KEY")

@@ -104,13 +104,14 @@ class SchedulerTick:
             time.sleep(1.0)
         raise RuntimeError(f"Cold wake failed after {attempts} attempts: {last_err}")
 
-    def drain_unacked(self, seal_first: bool = True) -> list[dict]:
+    def drain_unacked(self, seal_first: bool = True, seal_min_age: float = 0.0) -> list[dict]:
         t0 = time.monotonic()
         if seal_first:
             # 1. Ask remote to seal active spool if it exists
-            rc_seal, out_seal, err_seal = self._run_ssh(
-                ["python3", f"{self.remote_dir}/spool_manager.py", "--base-dir", self.remote_dir, "seal"], timeout_cap=15.0
-            )
+            seal_args = ["python3", f"{self.remote_dir}/spool_manager.py", "--base-dir", self.remote_dir, "seal"]
+            if seal_min_age > 0.0:
+                seal_args.extend(["--older-than", str(seal_min_age)])
+            rc_seal, out_seal, err_seal = self._run_ssh(seal_args, timeout_cap=15.0)
             if rc_seal != 0:
                 raise RuntimeError(f"Failed to seal remote spool: {err_seal or out_seal}")
         # 2. List sealed un-ACKed files
@@ -266,8 +267,8 @@ def main():
     parser.add_argument("--max-duration", type=float, default=MAX_LIFECYCLE_SECONDS)
     parser.add_argument("--pull-only", action="store_true", help="Only pull and ACK un-ACKed sealed files without probe")
     parser.add_argument("--seal", action="store_true", help="Seal active spool before pulling (for pull-only mode)")
+    parser.add_argument("--seal-min-age", type=float, default=0.0, help="Minimum age in seconds for sealing active spool")
     args = parser.parse_args()
-
     tick = SchedulerTick(
         ssh_target=args.ssh_target,
         ssh_user=args.ssh_user,
@@ -278,7 +279,7 @@ def main():
     )
     if args.pull_only:
         try:
-            pulled = tick.drain_unacked(seal_first=args.seal)
+            pulled = tick.drain_unacked(seal_first=args.seal, seal_min_age=args.seal_min_age)
             summary = {
                 "ssh_target": tick.ssh_target,
                 "archive_dir": str(tick.archive_dir),

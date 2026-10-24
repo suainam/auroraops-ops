@@ -1,13 +1,13 @@
 ---
-- name: 卸载控制端 LaunchAgent (Darwin Controller)
-  delegate_to: localhost
-  ansible.builtin.shell: |
-    launchctl unload "{{ lookup('env', 'HOME') }}/Library/LaunchAgents/com.auroraops.instabox-scheduler.plist" 2>/dev/null || true
-  tags: [rollback, observability, auroraops_monitor]
+# Controller LaunchAgent rollback via universal managed_timer task library
 
-- name: 移除控制端 LaunchAgent plist
+- name: 调用通用 managed_timer 卸载并清理控制端 LaunchAgent (Darwin Controller)
   delegate_to: localhost
-  ansible.builtin.file:
-    path: "{{ lookup('env', 'HOME') }}/Library/LaunchAgents/com.auroraops.instabox-scheduler.plist"
-    state: absent
+  ansible.builtin.include_tasks:
+    file: "{{ role_path }}/../../../common/tasks/managed_timer.yml"
+  vars:
+    timer_name: "com.auroraops.instabox-scheduler"
+    timer_exec_start: "{{ lookup('env', 'HOME') }}/.auroraops/bin/instabox_scheduler_tick.sh"
+    timer_enabled: false
+    timer_state: stopped
   tags: [rollback, observability, auroraops_monitor]

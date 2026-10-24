@@ -1,4 +1,6 @@
 ---
+# Controller LaunchAgent deployment via universal managed_timer task library
+
 - name: 确保控制端脚本目录存在 (Darwin Controller)
   delegate_to: localhost
   ansible.builtin.file:
@@ -7,15 +9,12 @@
     mode: "0755"
   tags: [deploy, observability, auroraops_monitor]
 
-- name: 确保控制端 LaunchAgents 与日志目录存在 (Darwin Controller)
+- name: 确保控制端日志目录存在 (Darwin Controller)
   delegate_to: localhost
   ansible.builtin.file:
-    path: "{{ item }}"
+    path: "{{ lookup('env', 'HOME') }}/Library/Logs/AuroraOps"
     state: directory
     mode: "0755"
-  loop:
-    - "{{ lookup('env', 'HOME') }}/Library/LaunchAgents"
-    - "{{ lookup('env', 'HOME') }}/Library/Logs/AuroraOps"
   tags: [deploy, observability, auroraops_monitor]
 
 - name: 部署控制端调度脚本至稳定路径 (Darwin Controller)
@@ -29,37 +28,19 @@
     - instabox_scheduler_tick.py
   tags: [deploy, observability, auroraops_monitor]
 
-- name: 部署控制端 LaunchAgent plist (Darwin Controller)
+- name: 调用通用 managed_timer 管理控制端 LaunchAgent (Darwin Controller)
   delegate_to: localhost
-  ansible.builtin.copy:
-    dest: "{{ lookup('env', 'HOME') }}/Library/LaunchAgents/com.auroraops.instabox-scheduler.plist"
-    mode: "0644"
-    content: |
-      <?xml version="1.0" encoding="UTF-8"?>
-      <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-      <plist version="1.0">
-      <dict>
-          <key>Label</key>
-          <string>com.auroraops.instabox-scheduler</string>
-          <key>ProgramArguments</key>
-          <array>
-              <string>/bin/bash</string>
-              <string>{{ lookup('env', 'HOME') }}/.auroraops/bin/instabox_scheduler_tick.sh</string>
-          </array>
-          <key>StartInterval</key>
-          <integer>14400</integer>
-          <key>StandardOutPath</key>
-          <string>{{ lookup('env', 'HOME') }}/Library/Logs/AuroraOps/instabox-scheduler.log</string>
-          <key>StandardErrorPath</key>
-          <string>{{ lookup('env', 'HOME') }}/Library/Logs/AuroraOps/instabox-scheduler.log</string>
-      </dict>
-      </plist>
-  tags: [deploy, observability, auroraops_monitor]
-
-- name: 重新加载控制端 LaunchAgent (Darwin Controller)
-  delegate_to: localhost
-  ansible.builtin.shell: |
-    launchctl unload "{{ lookup('env', 'HOME') }}/Library/LaunchAgents/com.auroraops.instabox-scheduler.plist" 2>/dev/null || true
-    launchctl load -w "{{ lookup('env', 'HOME') }}/Library/LaunchAgents/com.auroraops.instabox-scheduler.plist"
-  when: not ansible_check_mode
+  ansible.builtin.include_tasks:
+    file: "{{ role_path }}/../../../common/tasks/managed_timer.yml"
+  vars:
+    timer_name: "com.auroraops.instabox-scheduler"
+    timer_description: "Instabox 4-Hour Outer Probe Scheduler"
+    timer_exec_start: "{{ lookup('env', 'HOME') }}/.auroraops/bin/instabox_scheduler_tick.sh"
+    timer_exec_args:
+      - "/bin/bash"
+      - "{{ lookup('env', 'HOME') }}/.auroraops/bin/instabox_scheduler_tick.sh"
+    timer_interval_seconds: 14400
+    timer_log_dir: "{{ lookup('env', 'HOME') }}/Library/Logs/AuroraOps"
+    timer_enabled: true
+    timer_state: started
   tags: [deploy, observability, auroraops_monitor]

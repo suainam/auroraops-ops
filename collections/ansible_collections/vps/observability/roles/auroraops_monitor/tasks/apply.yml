@@ -40,6 +40,23 @@
     - "{{ auroraops_monitor_dir }}"
     - "{{ auroraops_monitor_spool_dir }}"
   tags: [deploy, observability, auroraops_monitor]
+- name: 捕获现有受管文件基线快照 (若已存在且未初始化基线)
+  become: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    backup_dir="/data/auroraops-monitor-baseline-backup"
+    mkdir -p "$backup_dir"
+    chmod 700 "$backup_dir"
+    for f in spool_manager.py auroraops_probe.py ipquality_geo_probe.py; do
+      if [ -f "{{ auroraops_monitor_dir }}/$f" ] && [ ! -f "$backup_dir/$f" ]; then
+        cp -a "{{ auroraops_monitor_dir }}/$f" "$backup_dir/$f"
+      fi
+    done
+  when:
+    - not (auroraops_monitor_baseline_exists | default(false))
+    - auroraops_monitor_pre_deploy_dir_exists | default(false)
+  tags: [deploy, observability, auroraops_monitor]
+
 
 - name: 部署 spool_manager.py 管理器
   become: true

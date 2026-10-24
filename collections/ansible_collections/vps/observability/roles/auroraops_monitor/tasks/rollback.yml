@@ -77,20 +77,23 @@
     - auroraops_monitor_unacked_check.stdout is defined
     - auroraops_monitor_unacked_check.stdout != 'clean'
   tags: [rollback, observability, auroraops_monitor]
-
 - name: 恢复预置文件基线 (若存在原始备份)
   become: true
   ansible.builtin.shell: |
-    set -e
-    orig_dir="{{ auroraops_monitor_dir }}/.auroraops_orig"
-    if [ -d "$orig_dir" ]; then
-      cp -a "$orig_dir"/* "{{ auroraops_monitor_dir }}/"
-      rm -rf "$orig_dir"
+    set -euo pipefail
+    backup_dir="/data/auroraops-monitor-baseline-backup"
+    if [ -d "$backup_dir" ]; then
+      for f in "$backup_dir"/*; do
+        if [ -f "$f" ]; then
+          cp -a "$f" "{{ auroraops_monitor_dir }}/"
+        fi
+      done
+      rm -rf "$backup_dir"
     fi
   when: auroraops_monitor_rollback_fact_stat.stat.exists
   tags: [rollback, observability, auroraops_monitor]
 
-- name: 清理角色部署的脚本文件
+- name: 清理新部署但不存在于部署前基线的脚本文件 (当且仅当部署前不存在)
   become: true
   ansible.builtin.file:
     path: "{{ auroraops_monitor_dir }}/{{ item }}"
@@ -100,7 +103,9 @@
     - auroraops_probe.py
     - ipquality_geo_probe.py
     - spool.lock
-  when: auroraops_monitor_rollback_fact_stat.stat.exists
+  when:
+    - auroraops_monitor_rollback_fact_stat.stat.exists
+    - not (auroraops_monitor_baseline.pre_deploy_dir_exists | default(false) | bool)
   tags: [rollback, observability, auroraops_monitor]
 
 - name: 移除 auroraops-monitor 部署目录 (当且仅当部署前不存在)

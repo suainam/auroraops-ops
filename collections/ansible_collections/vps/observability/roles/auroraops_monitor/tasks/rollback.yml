@@ -63,60 +63,146 @@
     lock_file="{{ auroraops_monitor_dir }}/spool.lock"
     touch "$lock_file"
 
-    flock -x "$lock_file" bash -c "
-      if [ -d '{{ auroraops_monitor_dir }}/spool' ] && [ \"\$(ls -A '{{ auroraops_monitor_dir }}/spool' 2>/dev/null)\" ]; then
-        cp -a '{{ auroraops_monitor_dir }}'/spool/* '$archive_dir/'
+    flock -x "$lock_file" bash -euo pipefail -c '
+      archive="$1"
+      spool_dir="$2"
+      spool_file="$3"
+
+      if [ -d "$spool_dir" ]; then
+        for f in "$spool_dir"/*; do
+          if [ -e "$f" ]; then
+            dest="$archive/$(basename "$f")"
+            cp -a "$f" "$dest"
+            python3 -c '\''import os, sys; fd = os.open(sys.argv[1], os.O_RDONLY); os.fsync(fd); os.close(fd)'\'' "$dest"
+          fi
+        done
       fi
-      if [ -f '{{ auroraops_monitor_dir }}/spool.jsonl' ] && [ -s '{{ auroraops_monitor_dir }}/spool.jsonl' ]; then
-        ts=\$(date +%s)
-        cp -a '{{ auroraops_monitor_dir }}/spool.jsonl' "\$archive_dir/spool-preserved-\$ts.jsonl"
+
+      if [ -f "$spool_file" ] && [ -s "$spool_file" ]; then
+        ts=$(date +%s)
+        dest="$archive/spool-preserved-${ts}.jsonl"
+        cp -a "$spool_file" "$dest"
+        python3 -c '\''import os, sys; fd = os.open(sys.argv[1], os.O_RDONLY); os.fsync(fd); os.close(fd)'\'' "$dest"
       fi
-      python3 -c \"import os; fd = os.open('$archive_dir', os.O_RDONLY); os.fsync(fd); os.close(fd)\"
-    "
+
+      # fsync target directory
+      python3 -c '\''import os, sys; fd = os.open(sys.argv[1], os.O_RDONLY); os.fsync(fd); os.close(fd)'\'' "$archive"
+
+      # All copied files and target dir fsync succeeded; delete archived source files
+      if [ -d "$spool_dir" ]; then
+        rm -rf "${spool_dir:?}"/*
+      fi
+      if [ -f "$spool_file" ]; then
+        rm -f "$spool_file"
+      fi
+    ' _ "$archive_dir" "{{ auroraops_monitor_dir }}/spool" "{{ auroraops_monitor_dir }}/spool.jsonl"
   when:
     - auroraops_monitor_rollback_fact_stat.stat.exists
     - auroraops_monitor_unacked_check.stdout is defined
     - auroraops_monitor_unacked_check.stdout != 'clean'
   tags: [rollback, observability, auroraops_monitor]
-- name: 恢复预置文件基线 (若存在原始备份)
+
+- name: 按 Baseline Manifest 恢复或删除逐文件基线
   become: true
   ansible.builtin.shell: |
     set -euo pipefail
-    backup_dir="/data/auroraops-monitor-baseline-backup"
-    if [ -d "$backup_dir" ]; then
-      for f in "$backup_dir"/*; do
-        if [ -f "$f" ]; then
-          cp -a "$f" "{{ auroraops_monitor_dir }}/"
-        fi
-      done
-      rm -rf "$backup_dir"
-    fi
+    python3 -c '
+    import os, sys, json, shutil, stat
+
+    fact_path = sys.argv[1]
+    monitor_dir = sys.argv[2]
+    backup_dir = sys.argv[3]
+    audit_path = sys.argv[4]
+
+    with open(fact_path, "r") as f:
+        fact = json.load(f)
+
+    # Save copy to audit path for rollback_verify before removing fact
+    with open(audit_path, "w") as f:
+        json.dump(fact, f, indent=2)
+
+    files_manifest = fact.get("files")
+    dir_meta = fact.get("dir_metadata", {})
+    spool_dir_meta = fact.get("spool_dir_metadata", {})
+    pre_dir_exists = fact.get("pre_deploy_dir_exists", False)
+
+    scripts = ["spool_manager.py", "auroraops_probe.py", "ipquality_geo_probe.py"]
+    runtime_files = ["spool.lock", "spool.jsonl"]
+
+    if files_manifest:
+        # Per-file manifest restoration
+        for s in scripts:
+            target = os.path.join(monitor_dir, s)
+            info = files_manifest.get(s, {})
+            if info.get("pre_exists", False):
+                src = os.path.join(backup_dir, s)
+                if os.path.exists(src):
+                    shutil.copy2(src, target)
+                    if "mode" in info:
+                        os.chmod(target, int(info["mode"], 8))
+                    if "uid" in info and "gid" in info:
+                        try:
+                            os.chown(target, info["uid"], info["gid"])
+                        except Exception:
+                            pass
+            else:
+                if os.path.lexists(target):
+                    os.remove(target)
+
+        for rf in runtime_files:
+            target = os.path.join(monitor_dir, rf)
+            info = files_manifest.get(rf, {})
+            if not info.get("pre_exists", False) and os.path.lexists(target):
+                os.remove(target)
+
+        # Restore or remove spool directory
+        spool_path = os.path.join(monitor_dir, "spool")
+        if spool_dir_meta.get("exists", False):
+            if "mode" in spool_dir_meta:
+                os.chmod(spool_path, int(spool_dir_meta["mode"], 8))
+            if "uid" in spool_dir_meta and "gid" in spool_dir_meta:
+                try:
+                    os.chown(spool_path, spool_dir_meta["uid"], spool_dir_meta["gid"])
+                except Exception:
+                    pass
+        else:
+            if os.path.exists(spool_path):
+                shutil.rmtree(spool_path)
+
+        # Restore or remove monitor directory
+        if dir_meta.get("exists", pre_dir_exists):
+            if "mode" in dir_meta:
+                os.chmod(monitor_dir, int(dir_meta["mode"], 8))
+            if "uid" in dir_meta and "gid" in dir_meta:
+                try:
+                    os.chown(monitor_dir, dir_meta["uid"], dir_meta["gid"])
+                except Exception:
+                    pass
+        else:
+            if os.path.exists(monitor_dir):
+                shutil.rmtree(monitor_dir)
+    else:
+        # Fallback for version 1 baseline
+        if os.path.isdir(backup_dir):
+            for item in os.listdir(backup_dir):
+                src = os.path.join(backup_dir, item)
+                if os.path.isfile(src):
+                    shutil.copy2(src, os.path.join(monitor_dir, item))
+        if not pre_dir_exists:
+            for s in scripts + runtime_files:
+                p = os.path.join(monitor_dir, s)
+                if os.path.lexists(p):
+                    os.remove(p)
+            spool_path = os.path.join(monitor_dir, "spool")
+            if os.path.exists(spool_path):
+                shutil.rmtree(spool_path)
+            if os.path.exists(monitor_dir):
+                shutil.rmtree(monitor_dir)
+
+    if os.path.exists(backup_dir):
+        shutil.rmtree(backup_dir)
+    ' "{{ auroraops_monitor_fact_path }}" "{{ auroraops_monitor_dir }}" "/data/auroraops-monitor-baseline-backup" "/data/auroraops-monitor-rollback-audit.json"
   when: auroraops_monitor_rollback_fact_stat.stat.exists
-  tags: [rollback, observability, auroraops_monitor]
-
-- name: 清理新部署但不存在于部署前基线的脚本文件 (当且仅当部署前不存在)
-  become: true
-  ansible.builtin.file:
-    path: "{{ auroraops_monitor_dir }}/{{ item }}"
-    state: absent
-  loop:
-    - spool_manager.py
-    - auroraops_probe.py
-    - ipquality_geo_probe.py
-    - spool.lock
-  when:
-    - auroraops_monitor_rollback_fact_stat.stat.exists
-    - not (auroraops_monitor_baseline.pre_deploy_dir_exists | default(false) | bool)
-  tags: [rollback, observability, auroraops_monitor]
-
-- name: 移除 auroraops-monitor 部署目录 (当且仅当部署前不存在)
-  become: true
-  ansible.builtin.file:
-    path: "{{ auroraops_monitor_dir }}"
-    state: absent
-  when:
-    - auroraops_monitor_rollback_fact_stat.stat.exists
-    - not (auroraops_monitor_baseline.pre_deploy_dir_exists | default(false) | bool)
   tags: [rollback, observability, auroraops_monitor]
 
 - name: 清理 Baseline Fact 记录

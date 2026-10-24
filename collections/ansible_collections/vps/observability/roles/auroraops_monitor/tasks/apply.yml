@@ -10,21 +10,82 @@
     mode: "0755"
   tags: [deploy, observability, auroraops_monitor]
 
-- name: 固化部署前 Baseline Fact 事实
+- name: 捕获并固化部署前 Baseline Fact 与逐文件基线快照 (首次部署前原子固化，不覆盖)
   become: true
-  ansible.builtin.copy:
-    dest: "{{ auroraops_monitor_fact_path }}"
-    mode: "0644"
-    content: |
-      {{
-        {
-          "auroraops_managed": true,
-          "version": 1,
-          "managed_dir": auroraops_monitor_dir,
-          "pre_deploy_dir_exists": auroraops_monitor_pre_deploy_dir_exists | default(false),
-          "max_spool_bytes": auroraops_monitor_max_spool_bytes | default(52428800)
-        } | to_nice_json
-      }}
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 -c '
+    import os, sys, stat, json, shutil, pwd, grp
+
+    monitor_dir = sys.argv[1]
+    spool_dir = sys.argv[2]
+    fact_path = sys.argv[3]
+    backup_dir = sys.argv[4]
+    max_spool_bytes = int(sys.argv[5])
+
+    def get_meta(path):
+        if not os.path.lexists(path):
+            return {"exists": False, "pre_exists": False}
+        st = os.stat(path)
+        try:
+            owner = pwd.getpwuid(st.st_uid).pw_name
+        except Exception:
+            owner = str(st.st_uid)
+        try:
+            group = grp.getgrgid(st.st_gid).gr_name
+        except Exception:
+            group = str(st.st_gid)
+        mode = oct(stat.S_IMODE(st.st_mode))
+        return {
+            "exists": True,
+            "pre_exists": True,
+            "mode": mode,
+            "owner": owner,
+            "group": group,
+            "uid": st.st_uid,
+            "gid": st.st_gid
+        }
+
+    dir_meta = get_meta(monitor_dir)
+    spool_meta = get_meta(spool_dir)
+
+    files_meta = {}
+    scripts = ["spool_manager.py", "auroraops_probe.py", "ipquality_geo_probe.py"]
+    runtime_files = ["spool.lock", "spool.jsonl"]
+
+    os.makedirs(backup_dir, exist_ok=True)
+    os.chmod(backup_dir, 0o700)
+
+    for name in scripts:
+        p = os.path.join(monitor_dir, name)
+        meta = get_meta(p)
+        files_meta[name] = meta
+        if meta["exists"]:
+            shutil.copy2(p, os.path.join(backup_dir, name))
+
+    for name in runtime_files:
+        p = os.path.join(monitor_dir, name)
+        ex = os.path.lexists(p)
+        files_meta[name] = {"exists": ex, "pre_exists": ex}
+
+    fact_data = {
+        "auroraops_managed": True,
+        "version": 2,
+        "managed_dir": monitor_dir,
+        "pre_deploy_dir_exists": dir_meta["exists"],
+        "dir_metadata": dir_meta,
+        "spool_dir_metadata": spool_meta,
+        "files": files_meta,
+        "max_spool_bytes": max_spool_bytes
+    }
+
+    os.makedirs(os.path.dirname(fact_path), exist_ok=True)
+    tmp_path = fact_path + ".tmp"
+    with open(tmp_path, "w") as f:
+        json.dump(fact_data, f, indent=2)
+    os.replace(tmp_path, fact_path)
+    os.chmod(fact_path, 0o644)
+    ' "{{ auroraops_monitor_dir }}" "{{ auroraops_monitor_spool_dir }}" "{{ auroraops_monitor_fact_path }}" "/data/auroraops-monitor-baseline-backup" "{{ auroraops_monitor_max_spool_bytes | default(52428800) }}"
   when: not (auroraops_monitor_baseline_exists | default(false))
   tags: [deploy, observability, auroraops_monitor]
 
@@ -39,22 +100,6 @@
   loop:
     - "{{ auroraops_monitor_dir }}"
     - "{{ auroraops_monitor_spool_dir }}"
-  tags: [deploy, observability, auroraops_monitor]
-- name: 捕获现有受管文件基线快照 (若已存在且未初始化基线)
-  become: true
-  ansible.builtin.shell: |
-    set -euo pipefail
-    backup_dir="/data/auroraops-monitor-baseline-backup"
-    mkdir -p "$backup_dir"
-    chmod 700 "$backup_dir"
-    for f in spool_manager.py auroraops_probe.py ipquality_geo_probe.py; do
-      if [ -f "{{ auroraops_monitor_dir }}/$f" ] && [ ! -f "$backup_dir/$f" ]; then
-        cp -a "{{ auroraops_monitor_dir }}/$f" "$backup_dir/$f"
-      fi
-    done
-  when:
-    - not (auroraops_monitor_baseline_exists | default(false))
-    - auroraops_monitor_pre_deploy_dir_exists | default(false)
   tags: [deploy, observability, auroraops_monitor]
 
 

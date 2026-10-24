@@ -16,21 +16,58 @@
     fail_msg: "回滚失败: {{ auroraops_monitor_fact_path }} 仍然残留"
   tags: [rollback_verify, observability, auroraops_monitor]
 
-- name: 验证监控目录已安全清除
+- name: 依据 Manifest 审计验证工作目录与文件回滚终态 (非虚断言)
   become: true
-  ansible.builtin.stat:
-    path: "{{ auroraops_monitor_dir }}"
-  register: auroraops_monitor_post_rb_dir
-  tags: [rollback_verify, observability, auroraops_monitor]
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 -c '
+    import os, sys, json, stat
 
-- name: 断言监控目录已不存在 (当且仅当部署前不存在)
-  ansible.builtin.assert:
-    that:
-      - not auroraops_monitor_post_rb_dir.stat.exists
-    fail_msg: "回滚失败: {{ auroraops_monitor_dir }} 仍然残留"
-  when: not (auroraops_monitor_pre_deploy_dir_exists | default(false) | bool)
-  tags: [rollback_verify, observability, auroraops_monitor]
+    audit_path = sys.argv[1]
+    monitor_dir = sys.argv[2]
 
+    if not os.path.exists(audit_path):
+        # Fallback when audit file absent: assert monitor_dir is absent
+        assert not os.path.exists(monitor_dir), f"{monitor_dir} still exists without audit baseline"
+        sys.exit(0)
+
+    with open(audit_path, "r") as f:
+        fact = json.load(f)
+
+    files_manifest = fact.get("files")
+    dir_meta = fact.get("dir_metadata", {})
+    pre_dir_exists = fact.get("pre_deploy_dir_exists", False)
+
+    scripts = ["spool_manager.py", "auroraops_probe.py", "ipquality_geo_probe.py"]
+    runtime_files = ["spool.lock", "spool.jsonl"]
+
+    if not dir_meta.get("exists", pre_dir_exists):
+        assert not os.path.exists(monitor_dir), f"Directory {monitor_dir} should be absent but exists"
+    else:
+        assert os.path.isdir(monitor_dir), f"Directory {monitor_dir} should exist but does not"
+        if "mode" in dir_meta:
+            curr_mode = oct(stat.S_IMODE(os.stat(monitor_dir).st_mode))
+            assert curr_mode == dir_meta["mode"], f"Mode mismatch on {monitor_dir}: {curr_mode} vs {dir_meta[\"mode\"]}"
+
+        if files_manifest:
+            for s in scripts:
+                target = os.path.join(monitor_dir, s)
+                info = files_manifest.get(s, {})
+                if info.get("pre_exists", False):
+                    assert os.path.isfile(target), f"Script {target} was pre-existing but is absent"
+                    if "mode" in info:
+                        curr_mode = oct(stat.S_IMODE(os.stat(target).st_mode))
+                        assert curr_mode == info["mode"], f"Mode mismatch on {target}: {curr_mode} vs {info[\"mode\"]}"
+                else:
+                    assert not os.path.lexists(target), f"Script {target} was newly deployed and should be absent"
+
+            for rf in runtime_files:
+                target = os.path.join(monitor_dir, rf)
+                info = files_manifest.get(rf, {})
+                if not info.get("pre_exists", False):
+                    assert not os.path.lexists(target), f"Runtime file {target} should be absent"
+    ' /data/auroraops-monitor-rollback-audit.json "{{ auroraops_monitor_dir }}"
+  tags: [rollback_verify, observability, auroraops_monitor]
 - name: 验证宿主机保护资产完好无损 (/data/home 与预置目录)
   become: true
   ansible.builtin.stat:
@@ -63,6 +100,13 @@
 
 - name: 验证控制端 LaunchAgent 回滚终态 (Darwin Controller)
   ansible.builtin.include_tasks: controller_scheduler_rollback_verify.yml
+  tags: [rollback_verify, observability, auroraops_monitor]
+
+- name: 清理回滚审计基线快照
+  become: true
+  ansible.builtin.file:
+    path: /data/auroraops-monitor-rollback-audit.json
+    state: absent
   tags: [rollback_verify, observability, auroraops_monitor]
 
 - name: 回滚验证终态合规输出

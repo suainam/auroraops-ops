@@ -102,13 +102,13 @@ class SchedulerTick:
         if seal_first:
             # 1. Ask remote to seal active spool if it exists
             rc_seal, out_seal, err_seal = self._run_ssh(
-                ["python3", f"{self.remote_dir}/spool_manager.py", "seal"], timeout_cap=15.0
+                ["python3", f"{self.remote_dir}/spool_manager.py", "--base-dir", self.remote_dir, "seal"], timeout_cap=15.0
             )
             if rc_seal != 0:
                 raise RuntimeError(f"Failed to seal remote spool: {err_seal or out_seal}")
         # 2. List sealed un-ACKed files
         rc, stdout, stderr = self._run_ssh(
-            ["python3", f"{self.remote_dir}/spool_manager.py", "list"], timeout_cap=15.0
+            ["python3", f"{self.remote_dir}/spool_manager.py", "--base-dir", self.remote_dir, "list"], timeout_cap=15.0
         )
         if rc != 0:
             raise RuntimeError(f"Failed to list un-ACKed files: {stderr}")
@@ -171,7 +171,7 @@ class SchedulerTick:
 
             # Send safe ACK with SHA256 binding
             ack_rc, ack_out, ack_err = self._run_ssh(
-                ["python3", f"{self.remote_dir}/spool_manager.py", "ack", fname, "--sha256", local_sha],
+                ["python3", f"{self.remote_dir}/spool_manager.py", "--base-dir", self.remote_dir, "ack", fname, "--sha256", local_sha],
                 timeout_cap=15.0,
             )
             if ack_rc != 0:

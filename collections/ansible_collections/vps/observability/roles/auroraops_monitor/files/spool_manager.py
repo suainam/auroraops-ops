@@ -23,7 +23,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_BASE_DIR = Path("/data/home/auroraops-monitor")
+DEFAULT_BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_MAX_BYTES = 50 * 1024 * 1024  # 50MB
 SEALED_FILENAME_RE = re.compile(r"^spool-[0-9]{8}T[0-9]{6}Z(_[0-9]+)?\.jsonl$")
 

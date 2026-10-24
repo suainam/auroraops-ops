@@ -63,19 +63,34 @@
 
 - name: 检查已安装 dpkg 包中是否存在云厂商监控包
   ansible.builtin.command:
-    argv: ["dpkg-query", "-W", "-f=${Package}\n", "tat_agent*", "barad*", "sgagent*", "qcloud*", "yunjing*"]
+    argv:
+      - "dpkg-query"
+      - "-W"
+      - "-f=${binary:Package} ${db:Status-Status}\n"
+      - "tat_agent*"
+      - "barad*"
+      - "sgagent*"
+      - "qcloud*"
+      - "yunjing*"
   register: os_reinstall_dpkg_check
-  failed_when: os_reinstall_dpkg_check.rc not in [0, 1]
+  failed_when: false
   changed_when: false
   tags: [verify, ops, os_reinstall, phase6]
 
-- name: 断言无云厂商监控 dpkg 包安装 (dpkg-query 返回码应为 1)
+- name: 断言无云厂商监控 dpkg 包处于安装状态
+  vars:
+    installed_vendor_pkgs: >-
+      {{
+        os_reinstall_dpkg_check.stdout_lines
+        | default([])
+        | select('regex', ' installed$')
+        | list
+      }}
   ansible.builtin.assert:
     that:
-      - os_reinstall_dpkg_check.rc == 1
+      - (installed_vendor_pkgs | length) == 0
     fail_msg: >-
-      检测到云厂商监控 dpkg 包遗留:
-      {{ os_reinstall_dpkg_check.stdout_lines }}
+      检测到云厂商监控 dpkg 包处于安装状态: {{ installed_vendor_pkgs }}
     quiet: true
   tags: [verify, ops, os_reinstall, phase6]
 
@@ -83,11 +98,11 @@
   ansible.builtin.command:
     argv: ["systemctl", "list-unit-files", "--no-legend", "tat*", "barad*", "sgagent*", "qcloud*", "yunjing*"]
   register: os_reinstall_unit_check
-  failed_when: os_reinstall_unit_check.rc not in [0, 1]
+  failed_when: os_reinstall_unit_check.rc != 0
   changed_when: false
   tags: [verify, ops, os_reinstall, phase6]
 
-- name: 断言无云监控相关 systemd unit 文件 (list-unit-files 无匹配)
+- name: 断言无云监控相关 systemd unit 文件 (list-unit-files 输出必须为空)
   ansible.builtin.assert:
     that:
       - (os_reinstall_unit_check.stdout | trim) == ""

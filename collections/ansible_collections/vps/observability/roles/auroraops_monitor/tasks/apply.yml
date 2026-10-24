@@ -324,7 +324,7 @@
                                         l = line.strip()
                                         if l:
                                             try:
-                                                 rec = json.loads(l)
+                                                rec = json.loads(l)
                                                 k = rec.get("run_id") or rec.get("timestamp_utc") or l
                                                 if k not in seen_keys:
                                                     seen_keys.add(k)

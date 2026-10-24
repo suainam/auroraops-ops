@@ -7,9 +7,10 @@ to:
     cc15:/var/lib/auroraops-monitor/spool_inbound/{source}/
 
 Protocol guarantees:
-1. State-tracked: ~/.auroraops/controller_spool/cc15_sync_state.json prevents duplicate pushes.
-2. Atomic remote delivery: writes to .tmp_<filename>.<uuid>, verifies sha256 on remote, then mv.
-3. Zero shell injection: parameterized SSH/SCP commands.
+1. Two-way verification: checks both local ledger AND remote file existence + sha256 digest before skipping.
+2. Atomic remote delivery with remote file & directory fsync; zero masking with `|| true`.
+3. Local durable state persistence with directory fsync.
+4. Fail-closed: non-zero exit code if any file fails.
 """
 
 from __future__ import annotations
@@ -36,6 +37,17 @@ def compute_sha256(file_path: Path) -> str:
     return h.hexdigest()
 
 
+def fsync_dir(dir_path: Path) -> None:
+    try:
+        dfd = os.open(str(dir_path), os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except Exception:
+        pass
+
+
 class Cc15SpoolPusher:
     def __init__(
         self,
@@ -53,7 +65,7 @@ class Cc15SpoolPusher:
         self.state_file = state_file or (self.local_spool_base / "cc15_sync_state.json")
         self.state = self._load_state()
 
-    def _load_state(self) -> dict[str, dict[str, str]]:
+    def _load_state(self) -> dict[str, dict[str, Any]]:
         if self.state_file.exists():
             try:
                 with open(self.state_file, "r", encoding="utf-8") as f:
@@ -72,10 +84,18 @@ class Cc15SpoolPusher:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, self.state_file)
+        fsync_dir(self.state_file.parent)
 
     def run_remote_cmd(self, cmd: str, timeout: int = 30) -> subprocess.CompletedProcess[str]:
         full_cmd = ["ssh", "-o", "BatchMode=yes", self.effective_target, cmd]
         return subprocess.run(full_cmd, capture_output=True, text=True, timeout=timeout, check=False)
+
+    def verify_remote_file(self, remote_path: str, expected_sha: str) -> bool:
+        cmd = f"test -f '{remote_path}' && sha256sum '{remote_path}' | awk '{{print $1}}'"
+        res = self.run_remote_cmd(cmd, timeout=15)
+        if res.returncode == 0 and res.stdout.strip() == expected_sha:
+            return True
+        return False
 
     def sync_source(self, source_name: str) -> dict[str, int]:
         source_dir = self.local_spool_base / source_name
@@ -84,7 +104,9 @@ class Cc15SpoolPusher:
 
         remote_source_dir = f"{self.remote_inbound_base}/{source_name}"
         # Ensure remote directory exists
-        mkdir_res = self.run_remote_cmd(f"mkdir -p '{remote_source_dir}' && chown -R auroraops-monitor:auroraops-monitor '{remote_source_dir}' 2>/dev/null || true")
+        mkdir_res = self.run_remote_cmd(
+            f"mkdir -p '{remote_source_dir}' && chown -R auroraops-monitor:auroraops-monitor '{remote_source_dir}'"
+        )
         if mkdir_res.returncode != 0:
             raise RuntimeError(f"Failed to create remote directory {remote_source_dir}: {mkdir_res.stderr}")
 
@@ -96,17 +118,19 @@ class Cc15SpoolPusher:
         for local_file in sorted(files, key=lambda p: p.name):
             file_key = f"{source_name}/{local_file.name}"
             local_sha256 = compute_sha256(local_file)
+            remote_final = f"{remote_source_dir}/{local_file.name}"
 
-            # Check sync state
+            # Check sync state AND check remote file presence
             existing_entry = self.state.get(file_key)
             if existing_entry and existing_entry.get("sha256") == local_sha256:
-                skipped += 1
-                continue
+                if self.verify_remote_file(remote_final, local_sha256):
+                    skipped += 1
+                    continue
+                # Remote file is missing despite local ledger; re-sync required!
 
             # Upload to temp file on remote
             nonce = uuid.uuid4().hex[:8]
             remote_tmp = f"{remote_source_dir}/.tmp_{local_file.name}.{nonce}"
-            remote_final = f"{remote_source_dir}/{local_file.name}"
 
             scp_cmd = ["scp", "-q", "-o", "BatchMode=yes", str(local_file), f"{self.effective_target}:{remote_tmp}"]
             scp_res = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=60, check=False)
@@ -114,22 +138,41 @@ class Cc15SpoolPusher:
                 failed += 1
                 continue
 
-            # Verify remote SHA256 and atomically rename
-            verify_cmd = f"sha256sum '{remote_tmp}' | awk '{{print $1}}'"
-            v_res = self.run_remote_cmd(verify_cmd)
-            remote_sha256 = v_res.stdout.strip()
+            # Atomically install on remote with sha256 verification and file/dir fsync
+            remote_script = f"""python3 -c "
+import os, sys, hashlib, shutil
+tmp_path = sys.argv[1]
+final_path = sys.argv[2]
+expected_sha = sys.argv[3]
+user = sys.argv[4]
+group = sys.argv[5]
 
-            if remote_sha256 != local_sha256:
+h = hashlib.sha256()
+with open(tmp_path, 'rb') as f:
+    while chunk := f.read(65536):
+        h.update(chunk)
+if h.hexdigest() != expected_sha:
+    sys.exit(2)
+
+os.replace(tmp_path, final_path)
+fd = os.open(final_path, os.O_RDONLY)
+os.fsync(fd)
+os.close(fd)
+
+dfd = os.open(os.path.dirname(final_path), os.O_RDONLY)
+os.fsync(dfd)
+os.close(dfd)
+
+shutil.chown(final_path, user=user, group=group)
+" '{remote_tmp}' '{remote_final}' '{local_sha256}' 'auroraops-monitor' 'auroraops-monitor'"""
+
+            inst_res = self.run_remote_cmd(remote_script, timeout=30)
+            if inst_res.returncode != 0:
                 self.run_remote_cmd(f"rm -f '{remote_tmp}'")
                 failed += 1
                 continue
 
-            mv_cmd = f"mv -f '{remote_tmp}' '{remote_final}' && chown auroraops-monitor:auroraops-monitor '{remote_final}' 2>/dev/null || true"
-            mv_res = self.run_remote_cmd(mv_cmd)
-            if mv_res.returncode != 0:
-                failed += 1
-                continue
-
+            # Record in local ledger
             self.state[file_key] = {
                 "sha256": local_sha256,
                 "synced_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -158,6 +201,10 @@ def main() -> None:
     pusher = Cc15SpoolPusher(ssh_target=args.ssh_target, ssh_user=args.ssh_user)
     res = pusher.push_all(args.sources)
     print(json.dumps(res, indent=2))
+
+    total_failed = sum(v.get("failed", 0) for v in res.values())
+    if total_failed > 0:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

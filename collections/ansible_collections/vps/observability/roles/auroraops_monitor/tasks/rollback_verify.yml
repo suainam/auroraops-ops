@@ -111,6 +111,8 @@
   loop:
     - /etc/systemd/system/auroraops_weekly_report.service
     - /etc/systemd/system/auroraops_weekly_report.timer
+    - /etc/systemd/system/auroraops_cf_collector.service
+    - /etc/systemd/system/auroraops_cf_collector.timer
     - /etc/auroraops/auroraops_monitor.env
   when: auroraops_monitor_mode == 'aggregator'
   tags: [rollback_verify, observability, auroraops_monitor]
@@ -130,6 +132,15 @@
   register: auroraops_monitor_post_rb_weekly_timer_active
   changed_when: false
   failed_when: auroraops_monitor_post_rb_weekly_timer_active.rc == 0
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [rollback_verify, observability, auroraops_monitor]
+
+- name: 验证 cf collector systemd timer 已完全停用 (Aggregator)
+  ansible.builtin.command:
+    cmd: systemctl is-active auroraops_cf_collector.timer
+  register: auroraops_monitor_post_rb_cf_timer_active
+  changed_when: false
+  failed_when: auroraops_monitor_post_rb_cf_timer_active.rc == 0
   when: auroraops_monitor_mode == 'aggregator'
   tags: [rollback_verify, observability, auroraops_monitor]
 

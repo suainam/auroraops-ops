@@ -28,6 +28,8 @@
   loop:
     - auroraops_weekly_report.timer
     - auroraops_weekly_report.service
+    - auroraops_cf_collector.timer
+    - auroraops_cf_collector.service
   failed_when: false
   when: auroraops_monitor_mode == 'aggregator'
   tags: [rollback, observability, auroraops_monitor]
@@ -40,6 +42,8 @@
   loop:
     - /etc/systemd/system/auroraops_weekly_report.timer
     - /etc/systemd/system/auroraops_weekly_report.service
+    - /etc/systemd/system/auroraops_cf_collector.timer
+    - /etc/systemd/system/auroraops_cf_collector.service
     - /etc/auroraops/auroraops_monitor.env
   when: auroraops_monitor_mode == 'aggregator'
   tags: [rollback, observability, auroraops_monitor]
@@ -134,6 +138,12 @@
     set -e
     if [ -d "{{ auroraops_monitor_dir }}/spool" ] && [ "$(ls -A {{ auroraops_monitor_dir }}/spool 2>/dev/null)" ]; then
       echo "has_unacked_sealed"
+    elif [ -d "{{ auroraops_monitor_dir }}/spool_inbound" ] && [ "$(find {{ auroraops_monitor_dir }}/spool_inbound -type f 2>/dev/null)" ]; then
+      echo "has_unacked_inbound"
+    elif [ -d "{{ auroraops_monitor_dir }}/cf_history" ] && [ "$(ls -A {{ auroraops_monitor_dir }}/cf_history 2>/dev/null)" ]; then
+      echo "has_unacked_history"
+    elif [ -d "{{ auroraops_monitor_dir }}/reports" ] && [ "$(ls -A {{ auroraops_monitor_dir }}/reports 2>/dev/null)" ]; then
+      echo "has_unacked_reports"
     elif [ -f "{{ auroraops_monitor_spool_file }}" ] && [ -s "{{ auroraops_monitor_spool_file }}" ]; then
       echo "has_unacked_active"
     else
@@ -163,15 +173,13 @@
       spool_dir="$2"
       spool_file="$3"
 
-      if [ -d "$spool_dir" ]; then
-        for f in "$spool_dir"/*; do
-          if [ -e "$f" ]; then
-            dest="$archive/$(basename "$f")"
-            cp -a "$f" "$dest"
-            python3 -c '\''import os, sys; fd = os.open(sys.argv[1], os.O_RDONLY); os.fsync(fd); os.close(fd)'\'' "$dest"
-          fi
-        done
-      fi
+      for sub in spool spool_inbound cf_history reports; do
+        sdir="$monitor_dir/$sub"
+        if [ -d "$sdir" ] && [ "$(ls -A "$sdir" 2>/dev/null)" ]; then
+          mkdir -p "$archive/$sub"
+          cp -a "$sdir"/* "$archive/$sub/" 2>/dev/null || true
+        fi
+      done
 
       if [ -f "$spool_file" ] && [ -s "$spool_file" ]; then
         ts=$(date +%s)
@@ -190,7 +198,7 @@
       if [ -f "$spool_file" ]; then
         rm -f "$spool_file"
       fi
-    ' _ "$archive_dir" "{{ auroraops_monitor_dir }}/spool" "{{ auroraops_monitor_spool_file }}"
+    ' _ "$archive_dir" "{{ auroraops_monitor_dir }}" "{{ auroraops_monitor_spool_file }}"
   when:
     - auroraops_monitor_rollback_fact_stat.stat.exists
     - auroraops_monitor_unacked_check.stdout is defined
@@ -252,6 +260,20 @@
             if not info.get("pre_exists", False) and os.path.lexists(target):
                 os.remove(target)
 
+
+        # Restore or remove system files
+        system_files = fact.get("system_files", {})
+        for sf_path, sf_meta in system_files.items():
+            sf_name = f"sys_{os.path.basename(sf_path)}"
+            src_sf = os.path.join(backup_dir, sf_name)
+            if sf_meta.get("pre_exists", False) and os.path.exists(src_sf):
+                os.makedirs(os.path.dirname(sf_path), exist_ok=True)
+                shutil.copy2(src_sf, sf_path)
+                if "mode" in sf_meta:
+                    os.chmod(sf_path, int(sf_meta["mode"], 8))
+            else:
+                if os.path.lexists(sf_path):
+                    os.remove(sf_path)
         # Restore or remove spool directory
         spool_path = os.path.join(monitor_dir, "spool")
         if spool_dir_meta.get("exists", False):
@@ -276,6 +298,15 @@
                 except Exception:
                     pass
         else:
+            archive_dir = sys.argv[5] if len(sys.argv) > 5 else None
+            if archive_dir and os.path.exists(monitor_dir):
+                for sub in ["spool", "spool_inbound", "cf_history", "reports"]:
+                    sdir = os.path.join(monitor_dir, sub)
+                    if os.path.isdir(sdir) and os.listdir(sdir):
+                        dest = os.path.join(archive_dir, sub)
+                        os.makedirs(dest, exist_ok=True)
+                        for item in os.listdir(sdir):
+                            shutil.copy2(os.path.join(sdir, item), os.path.join(dest, item))
             if os.path.exists(monitor_dir):
                 shutil.rmtree(monitor_dir)
     else:
@@ -298,7 +329,7 @@
 
     if os.path.exists(backup_dir):
         shutil.rmtree(backup_dir)
-    ' "{{ auroraops_monitor_fact_path }}" "{{ auroraops_monitor_dir }}" "{{ auroraops_monitor_backup_dir }}" "{{ auroraops_monitor_audit_file }}"
+    ' "{{ auroraops_monitor_fact_path }}" "{{ auroraops_monitor_dir }}" "{{ auroraops_monitor_backup_dir }}" "{{ auroraops_monitor_audit_file }}" "{{ auroraops_monitor_unacked_archive_dir }}"
   when: auroraops_monitor_rollback_fact_stat.stat.exists
   tags: [rollback, observability, auroraops_monitor]
 
@@ -315,10 +346,9 @@
   ansible.builtin.user:
     name: "{{ auroraops_monitor_user }}"
     state: absent
-    remove: false
-  failed_when: false
-  when: auroraops_monitor_mode in ['host_metrics', 'aggregator']
-  tags: [rollback, observability, auroraops_monitor]
+  when:
+    - auroraops_monitor_mode in ['host_metrics', 'aggregator']
+    - not (auroraops_monitor_baseline.user_pre_exists | default(false))
 
 - name: 移除专用非特权系统组 (Host Metrics & Aggregator)
   become: true
@@ -326,5 +356,6 @@
     name: "{{ auroraops_monitor_group }}"
     state: absent
   failed_when: false
-  when: auroraops_monitor_mode in ['host_metrics', 'aggregator']
-  tags: [rollback, observability, auroraops_monitor]
+  when:
+    - auroraops_monitor_mode in ['host_metrics', 'aggregator']
+    - not (auroraops_monitor_baseline.group_pre_exists | default(false))

@@ -3,14 +3,14 @@
 
 Aggregates:
 1. InstaBox outer-probe bounded spool records (reachability, Google/YouTube latencies & routing).
-2. qqg1299 host metrics & geo-audit cursor records (load, memory, sockets, geo-drift events).
-3. Cloudflare Server Monitor read-only 24h history & node status (incremental archive).
+2. qqg1299 host metrics & geo-audit cursor records (loadavg, memory, sockets, geo-drift events).
+3. Cloudflare Server Monitor read-only history & node status (continuous cumulative archive).
 
 Core Invariants:
 - Deterministic math: all percentiles (p50/p95), loss rates, availability calculated strictly in Python.
 - Real denominator: availability = valid_samples / expected_samples (no fabricated 100% uptime).
 - TypeSafe Jev decide-only: semantic risk evaluation via SystemOne contract, never chat completion.
-- Fail-closed / Explicit pending: API/AI errors surface as pending_review, never fake completed.
+- Fail-closed / Explicit pending: low confidence or API errors surface as pending_review, never fake completed.
 - Sanitized outputs: zero secret leakage in JSON/Markdown reports.
 """
 
@@ -56,10 +56,10 @@ def load_env_file(env_path: Path) -> dict[str, str]:
     return env
 
 
-def percentile(data: list[float], pct: float) -> float:
+def percentile(data: list[float], pct: float) -> float | None:
     """Calculate the p-th percentile of a list of floats (0 <= pct <= 100)."""
     if not data:
-        return 0.0
+        return None
     s = sorted(data)
     k = (len(s) - 1) * (pct / 100.0)
     f = math.floor(k)
@@ -81,7 +81,6 @@ def calculate_availability(valid: int, expected: int) -> float:
 def parse_iso_utc(ts_str: str) -> datetime | None:
     if not ts_str:
         return None
-    # Normalize ISO format
     ts_clean = ts_str.replace("Z", "+00:00")
     try:
         dt = datetime.fromisoformat(ts_clean)
@@ -153,7 +152,6 @@ class Aggregator:
         if not records:
             return {"status": "no_records_in_window", "records_count": 0}
 
-        # Calculate statistics
         google_latencies: list[float] = []
         youtube_latencies: list[float] = []
         reachability_stats: dict[str, dict[str, Any]] = {}
@@ -191,7 +189,6 @@ class Aggregator:
                 if lat is not None and isinstance(lat, (int, float)):
                     reachability_stats[target]["pings"].append(float(lat))
 
-        # Expected runs: 4-hour intervals = 6 runs/day
         days_span = max((end_utc - start_utc).total_seconds() / 86400.0, 0.1)
         expected_runs = int(math.ceil(days_span * 6))
         valid_runs = len(records)
@@ -234,7 +231,7 @@ class Aggregator:
         }
 
     def process_qqg1299_spool(self, start_utc: datetime, end_utc: datetime) -> dict[str, Any]:
-        """Aggregate qqg1299 host metrics and geo-audit events."""
+        """Aggregate qqg1299 host metrics and geo-audit events from producer."""
         qqg_dir = self.inbound_dir / "qqg1299"
         if not qqg_dir.exists():
             return {"status": "no_data", "records_count": 0}
@@ -265,7 +262,6 @@ class Aggregator:
         if not records:
             return {"status": "no_records_in_window", "records_count": 0}
 
-        # Expected samples: 5-minute interval = 288 samples/day
         days_span = max((end_utc - start_utc).total_seconds() / 86400.0, 0.1)
         expected_samples = int(math.ceil(days_span * 288))
         valid_samples = len(records)
@@ -279,44 +275,85 @@ class Aggregator:
         for r in records:
             pm = r.get("proc_metrics", {})
             loadavg = pm.get("loadavg", {})
-            if "1m" in loadavg:
-                load1s.append(float(loadavg["1m"]))
-            if "5m" in loadavg:
-                load5s.append(float(loadavg["5m"]))
+            # producer uses load1, load5 (fallback to 1m, 5m)
+            l1 = loadavg.get("load1") if "load1" in loadavg else loadavg.get("1m")
+            l5 = loadavg.get("load5") if "load5" in loadavg else loadavg.get("5m")
+            if l1 is not None and isinstance(l1, (int, float)):
+                load1s.append(float(l1))
+            if l5 is not None and isinstance(l5, (int, float)):
+                load5s.append(float(l5))
 
             mem = pm.get("memory", {})
-            total_kb = mem.get("mem_total_kb", 0)
-            avail_kb = mem.get("mem_available_kb", 0)
-            if total_kb > 0:
-                used_pct = ((total_kb - avail_kb) / total_kb) * 100.0
-                mem_pcts.append(used_pct)
+            # producer uses used_pct directly or total_kb / available_kb
+            if "used_pct" in mem and mem["used_pct"] is not None and isinstance(mem["used_pct"], (int, float)):
+                mem_pcts.append(float(mem["used_pct"]))
+            else:
+                total_kb = mem.get("total_kb") if "total_kb" in mem else mem.get("mem_total_kb")
+                avail_kb = mem.get("available_kb") if "available_kb" in mem else mem.get("mem_available_kb")
+                if total_kb and total_kb > 0 and avail_kb is not None:
+                    mem_pcts.append(((total_kb - avail_kb) / total_kb) * 100.0)
 
+            # producer emits geo_events as [{"log_timestamp": ..., "data": {...}}]
             evs = r.get("geo_events", [])
             if isinstance(evs, list):
                 for e in evs:
                     if isinstance(e, dict):
-                        geo_events_collected.append(e)
+                        ts = e.get("log_timestamp") or e.get("timestamp")
+                        data = e.get("data")
+                        if isinstance(data, dict):
+                            yt_reg = data.get("youtube", {}).get("region") if isinstance(data.get("youtube"), dict) else None
+                            gs_country = data.get("google_seed", {}).get("x_country") if isinstance(data.get("google_seed"), dict) else None
+                            ip = data.get("current_ip") or (data.get("ipquality", {}).get("ip") if isinstance(data.get("ipquality"), dict) else None)
+                            asn = data.get("asn") or (data.get("ipquality", {}).get("asn") if isinstance(data.get("ipquality"), dict) else None)
+                            region = yt_reg or gs_country or data.get("region")
+                            geo_events_collected.append({
+                                "timestamp": ts,
+                                "current_ip": ip,
+                                "asn": asn,
+                                "region": region,
+                            })
+                        else:
+                            geo_events_collected.append({
+                                "timestamp": ts,
+                                "current_ip": e.get("current_ip"),
+                                "asn": e.get("asn"),
+                                "region": e.get("region"),
+                            })
 
         # Geo events analysis & drift detection
         unique_ips = set()
         unique_asns = set()
+        unique_regions = set()
         drift_events = []
         last_ip = None
-        for ev in sorted(geo_events_collected, key=lambda x: x.get("timestamp", "")):
+        last_region = None
+
+        for ev in sorted(geo_events_collected, key=lambda x: x.get("timestamp") or ""):
             ip = ev.get("current_ip")
             asn = ev.get("asn")
+            region = ev.get("region")
             if ip:
                 unique_ips.add(ip)
                 if last_ip and ip != last_ip:
                     drift_events.append({
                         "timestamp": ev.get("timestamp"),
+                        "type": "ip_drift",
                         "from_ip": last_ip,
                         "to_ip": ip,
-                        "asn": asn,
                     })
                 last_ip = ip
             if asn:
                 unique_asns.add(asn)
+            if region:
+                unique_regions.add(region)
+                if last_region and region != last_region:
+                    drift_events.append({
+                        "timestamp": ev.get("timestamp"),
+                        "type": "region_drift",
+                        "from_region": last_region,
+                        "to_region": region,
+                    })
+                last_region = region
 
         return {
             "status": "ok",
@@ -327,19 +364,20 @@ class Aggregator:
                 "availability_pct": availability_pct,
             },
             "loadavg": {
-                "1m_avg": round(sum(load1s) / len(load1s), 2) if load1s else 0.0,
-                "1m_p95": percentile(load1s, 95),
-                "5m_avg": round(sum(load5s) / len(load5s), 2) if load5s else 0.0,
+                "1m_avg": round(sum(load1s) / len(load1s), 2) if load1s else None,
+                "1m_p95": percentile(load1s, 95) if load1s else None,
+                "5m_avg": round(sum(load5s) / len(load5s), 2) if load5s else None,
             },
             "memory": {
-                "used_pct_avg": round(sum(mem_pcts) / len(mem_pcts), 2) if mem_pcts else 0.0,
-                "used_pct_max": round(max(mem_pcts), 2) if mem_pcts else 0.0,
-                "used_pct_p95": percentile(mem_pcts, 95),
+                "used_pct_avg": round(sum(mem_pcts) / len(mem_pcts), 2) if mem_pcts else None,
+                "used_pct_max": round(max(mem_pcts), 2) if mem_pcts else None,
+                "used_pct_p95": percentile(mem_pcts, 95) if mem_pcts else None,
             },
             "geo_audit": {
                 "events_count": len(geo_events_collected),
                 "unique_egress_ips": sorted(list(unique_ips)),
                 "unique_asns": sorted(list(unique_asns)),
+                "unique_regions": sorted(list(unique_regions)),
                 "drift_events_count": len(drift_events),
                 "drift_events": drift_events[:10],
             },
@@ -349,9 +387,7 @@ class Aggregator:
     # 2. Cloudflare Server Monitor Read-Only History Archival & Metrics
     # -------------------------------------------------------------------------
     def _get_cf_jwt(self, worker_url: str, password: str) -> str:
-        """Fetch or reuse 7-day Bearer JWT using Vault admin password."""
         now = time.time()
-        # Check cache
         if self.token_cache_file.exists():
             try:
                 with open(self.token_cache_file, "r", encoding="utf-8") as f:
@@ -363,7 +399,6 @@ class Aggregator:
             except Exception:
                 pass
 
-        # Login to obtain fresh token
         login_url = f"{worker_url.rstrip('/')}/admin/api"
         payload = json.dumps({"action": "login", "username": "admin", "password": password}).encode("utf-8")
         req = urllib.request.Request(
@@ -378,8 +413,7 @@ class Aggregator:
             if not token:
                 raise RuntimeError(f"Cloudflare login failed: {data}")
 
-        # Extract JWT exp claim
-        exp_ts = now + 7 * 86400  # Default 7 days
+        exp_ts = now + 7 * 86400
         try:
             parts = token.split(".")
             if len(parts) == 3:
@@ -390,14 +424,17 @@ class Aggregator:
         except Exception:
             pass
 
-        # Save cache
-        with open(self.token_cache_file, "w", encoding="utf-8") as f:
+        # Atomic write mode 0600
+        tmp_token = self.token_cache_file.with_suffix(".tmp")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        fd = os.open(str(tmp_token), flags, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump({"token": token, "exp": exp_ts}, f)
-        os.chmod(self.token_cache_file, 0o600)
+        os.replace(tmp_token, self.token_cache_file)
         return token
 
-    def fetch_and_archive_cf_history(self) -> dict[str, Any]:
-        """Strictly call GET /api/servers and GET /api/history/all to archive 24h history."""
+    def collect_cf_history_tick(self) -> dict[str, Any]:
+        """Fetch 24h history for all servers and merge into persistent archive."""
         worker_url = self.env.get("CF_WORKER_URL", os.environ.get("CF_WORKER_URL", "https://cf-server-monitor.suainam.workers.dev"))
         password = self.env.get("CF_ADMIN_PASSWORD", os.environ.get("CF_ADMIN_PASSWORD", ""))
 
@@ -409,7 +446,6 @@ class Aggregator:
         except Exception as e:
             return {"status": "auth_failed", "error": str(e)}
 
-        # 1. GET /api/servers
         servers_url = f"{worker_url.rstrip('/')}/api/servers"
         sreq = urllib.request.Request(
             servers_url,
@@ -423,9 +459,8 @@ class Aggregator:
             return {"status": "fetch_servers_failed", "error": str(e)}
 
         servers = servers_data.get("servers", [])
-        server_summaries: dict[str, Any] = {}
+        collected = {}
 
-        # 2. GET /api/history/all for each server
         for srv in servers:
             sid = srv.get("id")
             sname = srv.get("name", sid)
@@ -438,11 +473,13 @@ class Aggregator:
                 headers={"Authorization": f"Bearer {token}", "User-Agent": USER_AGENT},
                 method="GET",
             )
+            fresh_points = []
+            fetch_status = "ok"
             try:
                 with urllib.request.urlopen(hreq, timeout=15) as hresp:
-                    fresh_points: list[dict[str, Any]] = json.loads(hresp.read().decode("utf-8"))
+                    fresh_points = json.loads(hresp.read().decode("utf-8"))
             except Exception as e:
-                fresh_points = []
+                fetch_status = f"error: {e}"
 
             # Incremental archive merge
             archive_file = self.cf_history_dir / f"{sid}.json"
@@ -472,36 +509,124 @@ class Aggregator:
                 json.dump(merged_points, af, indent=1)
             os.replace(tmp_af, archive_file)
 
-            # Compute server metrics
-            cpu_vals = [float(p["cpu"]) for p in fresh_points if "cpu" in p and p["cpu"] is not None]
-            ram_vals = []
-            for p in fresh_points:
-                tot = p.get("ram_total", 0)
-                used = p.get("ram_used", 0)
-                if tot and tot > 0:
-                    ram_vals.append((used / tot) * 100.0)
+            collected[sname] = {
+                "id": sid,
+                "fetch_status": fetch_status,
+                "fresh_points": len(fresh_points),
+                "total_archived": len(merged_points),
+            }
 
-            # Loss rates
-            loss_ct_vals = [float(p["loss_ct"]) for p in fresh_points if p.get("loss_ct") is not None]
-            loss_cu_vals = [float(p["loss_cu"]) for p in fresh_points if p.get("loss_cu") is not None]
-            loss_cm_vals = [float(p["loss_cm"]) for p in fresh_points if p.get("loss_cm") is not None]
+        return {"status": "ok", "collected_servers": len(servers), "details": collected}
 
-            # Ping latencies
-            ping_ct_vals = [float(p["ping_ct"]) for p in fresh_points if p.get("ping_ct") is not None and p["ping_ct"] > 0]
-            ping_cu_vals = [float(p["ping_cu"]) for p in fresh_points if p.get("ping_cu") is not None and p["ping_cu"] > 0]
+    def aggregate_cf_history_window(self, start_utc: datetime, end_utc: datetime) -> dict[str, Any]:
+        """Aggregate CF server metrics strictly across the cumulative archive within the window."""
+        # Run a collection tick to pull the freshest 24h
+        self.collect_cf_history_tick()
+
+        worker_url = self.env.get("CF_WORKER_URL", os.environ.get("CF_WORKER_URL", "https://cf-server-monitor.suainam.workers.dev"))
+        password = self.env.get("CF_ADMIN_PASSWORD", os.environ.get("CF_ADMIN_PASSWORD", ""))
+
+        servers = []
+        if password:
+            try:
+                token = self._get_cf_jwt(worker_url, password)
+                sreq = urllib.request.Request(
+                    f"{worker_url.rstrip('/')}/api/servers",
+                    headers={"Authorization": f"Bearer {token}", "User-Agent": USER_AGENT},
+                    method="GET",
+                )
+                with urllib.request.urlopen(sreq, timeout=15) as resp:
+                    servers = json.loads(resp.read().decode("utf-8")).get("servers", [])
+            except Exception:
+                pass
+
+        now = datetime.now(timezone.utc)
+        server_summaries: dict[str, Any] = {}
+
+        for srv in servers:
+            sid = srv.get("id")
+            sname = srv.get("name", sid)
+            if not sid:
+                continue
+
+            archive_file = self.cf_history_dir / f"{sid}.json"
+            all_archived = []
+            if archive_file.exists():
+                try:
+                    with open(archive_file, "r", encoding="utf-8") as af:
+                        stored = json.load(af)
+                        if isinstance(stored, list):
+                            all_archived = stored
+                except Exception:
+                    pass
+
+            # Filter points in window
+            window_points = []
+            for p in all_archived:
+                pts = parse_iso_utc(p.get("timestamp", ""))
+                if pts and start_utc <= pts <= end_utc:
+                    window_points.append(p)
+
+            # Online detection: last_updated within 2h
+            lu_str = srv.get("last_updated")
+            lu_dt = parse_iso_utc(lu_str) if lu_str else None
+            is_online = bool(lu_dt and (now - lu_dt).total_seconds() < 7200)
+
+            # Coverage classification
+            cnt = len(window_points)
+            if cnt >= 300:
+                cov = "full"
+            elif cnt > 0:
+                cov = "partial"
+            else:
+                cov = "none"
+
+            if cnt > 0:
+                cpu_vals = [float(p["cpu"]) for p in window_points if "cpu" in p and p["cpu"] is not None]
+                ram_vals = []
+                for p in window_points:
+                    tot = p.get("ram_total", 0)
+                    used = p.get("ram_used", 0)
+                    if tot and tot > 0:
+                        ram_vals.append((used / tot) * 100.0)
+
+                loss_ct_vals = [float(p["loss_ct"]) for p in window_points if p.get("loss_ct") is not None]
+                loss_cu_vals = [float(p["loss_cu"]) for p in window_points if p.get("loss_cu") is not None]
+                loss_cm_vals = [float(p["loss_cm"]) for p in window_points if p.get("loss_cm") is not None]
+
+                ping_ct_vals = [float(p["ping_ct"]) for p in window_points if p.get("ping_ct") is not None and p["ping_ct"] > 0]
+                ping_cu_vals = [float(p["ping_cu"]) for p in window_points if p.get("ping_cu") is not None and p["ping_cu"] > 0]
+
+                cpu_avg = round(sum(cpu_vals) / len(cpu_vals), 2) if cpu_vals else None
+                ram_avg = round(sum(ram_vals) / len(ram_vals), 2) if ram_vals else None
+                loss_ct = round(sum(loss_ct_vals) / len(loss_ct_vals), 2) if loss_ct_vals else None
+                loss_cu = round(sum(loss_cu_vals) / len(loss_cu_vals), 2) if loss_cu_vals else None
+                loss_cm = round(sum(loss_cm_vals) / len(loss_cm_vals), 2) if loss_cm_vals else None
+                ping_ct_p50 = percentile(ping_ct_vals, 50)
+                ping_ct_p95 = percentile(ping_ct_vals, 95)
+            else:
+                cpu_avg = None
+                ram_avg = None
+                loss_ct = None
+                loss_cu = None
+                loss_cm = None
+                ping_ct_p50 = None
+                ping_ct_p95 = None
 
             server_summaries[sname] = {
                 "id": sid,
-                "online": srv.get("last_updated") is not None,
-                "total_archived_points": len(merged_points),
-                "recent_24h_points": len(fresh_points),
-                "cpu_avg_pct": round(sum(cpu_vals) / len(cpu_vals), 2) if cpu_vals else 0.0,
-                "ram_avg_pct": round(sum(ram_vals) / len(ram_vals), 2) if ram_vals else 0.0,
-                "loss_ct_avg": round(sum(loss_ct_vals) / len(loss_ct_vals), 2) if loss_ct_vals else 0.0,
-                "loss_cu_avg": round(sum(loss_cu_vals) / len(loss_cu_vals), 2) if loss_cu_vals else 0.0,
-                "loss_cm_avg": round(sum(loss_cm_vals) / len(loss_cm_vals), 2) if loss_cm_vals else 0.0,
-                "ping_ct_p50_ms": percentile(ping_ct_vals, 50),
-                "ping_ct_p95_ms": percentile(ping_ct_vals, 95),
+                "online": is_online,
+                "last_updated_utc": lu_str,
+                "coverage": cov,
+                "window_points_count": cnt,
+                "total_archived_points": len(all_archived),
+                "cpu_avg_pct": cpu_avg,
+                "ram_avg_pct": ram_avg,
+                "loss_ct_avg": loss_ct,
+                "loss_cu_avg": loss_cu,
+                "loss_cm_avg": loss_cm,
+                "ping_ct_p50_ms": ping_ct_p50,
+                "ping_ct_p95_ms": ping_ct_p95,
             }
 
         return {
@@ -529,6 +654,7 @@ class Aggregator:
         except (PermissionError, OSError):
             pass
         return ""
+
     def evaluate_with_jev(self, summary_facts: dict[str, Any]) -> dict[str, Any]:
         """Call TypeSafe Jev SystemOne decide contract on normalized secret-free facts."""
         key = self._resolve_typesafe_key()
@@ -539,21 +665,32 @@ class Aggregator:
                 "action": "escalate_human",
             }
 
-        # Build clean narration of facts
         instabox = summary_facts.get("instabox", {})
         qqg = summary_facts.get("qqg1299", {})
         cf = summary_facts.get("cf_monitor", {})
 
+        # Build comprehensive network facts
+        reach = instabox.get("reachability", {})
+        high_loss_targets = [tgt for tgt, tinfo in reach.items() if tinfo.get("loss_pct", 0) > 20.0]
+        unreachable_targets = [tgt for tgt, tinfo in reach.items() if tinfo.get("samples", 0) > 0 and tinfo.get("loss_pct") == 100.0]
+
+        cf_servers = cf.get("servers", {})
+        offline_servers = [sname for sname, sinfo in cf_servers.items() if not sinfo.get("online")]
+        cf_loss_servers = [sname for sname, sinfo in cf_servers.items() if (sinfo.get("loss_ct_avg") or 0) > 5.0]
+
         narration = (
-            f"Weekly Infrastructure Summary Facts:\n"
+            f"Weekly Infrastructure Verified Facts:\n"
             f"- InstaBox Outer Probes: valid_runs={instabox.get('samples', {}).get('valid_runs')}, "
             f"availability={instabox.get('samples', {}).get('availability_pct')}%, "
             f"google_p50={instabox.get('google', {}).get('latency_p50_ms')}ms, "
-            f"youtube_p50={instabox.get('youtube', {}).get('latency_p50_ms')}ms.\n"
-            f"- qqg1299 Relay Node: load1m_avg={qqg.get('loadavg', {}).get('1m_avg')}, "
+            f"youtube_p50={instabox.get('youtube', {}).get('latency_p50_ms')}ms, "
+            f"unreachable_targets={unreachable_targets}, high_loss_targets={high_loss_targets}.\n"
+            f"- qqg1299 Relay Node: load1_avg={qqg.get('loadavg', {}).get('1m_avg')}, "
             f"memory_avg={qqg.get('memory', {}).get('used_pct_avg')}%, "
-            f"geo_drift_events={qqg.get('geo_audit', {}).get('drift_events_count')}.\n"
-            f"- Cloudflare Monitored Nodes: total_servers={cf.get('servers_count', 0)}.\n"
+            f"geo_drift_events={qqg.get('geo_audit', {}).get('drift_events_count')}, "
+            f"unique_regions={qqg.get('geo_audit', {}).get('unique_regions')}.\n"
+            f"- Cloudflare Monitored Nodes: total_servers={cf.get('servers_count', 0)}, "
+            f"offline_servers={offline_servers}, high_loss_servers={cf_loss_servers}.\n"
         )
 
         payload = {
@@ -601,7 +738,15 @@ class Aggregator:
                 risk_choice = rr.get("choice")
                 risk_conf = float(rr.get("confidence", 0.0))
 
-                if health_choice and health_conf >= MIN_JEV_CONFIDENCE:
+                # Gating: BOTH health AND risk must meet confidence threshold
+                is_confident = (
+                    health_choice is not None
+                    and health_conf >= MIN_JEV_CONFIDENCE
+                    and risk_choice is not None
+                    and risk_conf >= MIN_JEV_CONFIDENCE
+                )
+
+                if is_confident:
                     return {
                         "status": "evaluated",
                         "model": DEFAULT_JEV_MODEL,
@@ -610,12 +755,23 @@ class Aggregator:
                         "risk_rating": risk_choice,
                         "risk_confidence": risk_conf,
                         "source": "typesafe/jev-latest",
+                        "raw_answers": answers,
                     }
                 else:
+                    reasons = []
+                    if not health_choice or health_conf < MIN_JEV_CONFIDENCE:
+                        reasons.append(f"health confidence low/missing ({health_conf} < {MIN_JEV_CONFIDENCE})")
+                    if not risk_choice or risk_conf < MIN_JEV_CONFIDENCE:
+                        reasons.append(f"risk confidence low/missing ({risk_conf} < {MIN_JEV_CONFIDENCE})")
                     return {
                         "status": "pending_review",
-                        "reason": f"Jev confidence below threshold ({health_conf} < {MIN_JEV_CONFIDENCE})",
+                        "reason": "; ".join(reasons),
                         "action": "escalate_human",
+                        "health_choice": health_choice,
+                        "health_confidence": health_conf,
+                        "risk_choice": risk_choice,
+                        "risk_confidence": risk_conf,
+                        "raw_answers": answers,
                     }
         except Exception as e:
             return {
@@ -629,7 +785,6 @@ class Aggregator:
     # -------------------------------------------------------------------------
     @staticmethod
     def assert_sanitized(content: str) -> None:
-        """Enforce zero-secret leakage."""
         patterns = [
             r"Bearer\s+[A-Za-z0-9_\-\.]{25,}",
             r"apik[A-Za-z0-9_\-]{20,}",
@@ -643,12 +798,13 @@ class Aggregator:
 
     def generate_weekly_report(self, days: int = 7) -> dict[str, str]:
         start_utc, end_utc = self.get_time_window(days=days)
-        iso_week = f"{start_utc.year}-W{start_utc.isocalendar()[1]:02d}"
+        iso_year, iso_w, _ = start_utc.isocalendar()
+        iso_week = f"{iso_year}-W{iso_w:02d}"
 
         # 1. Aggregate sources
         instabox_facts = self.process_instabox_spool(start_utc, end_utc)
         qqg_facts = self.process_qqg1299_spool(start_utc, end_utc)
-        cf_facts = self.fetch_and_archive_cf_history()
+        cf_facts = self.aggregate_cf_history_window(start_utc, end_utc)
 
         summary_facts = {
             "period": {"iso_week": iso_week, "start_utc": start_utc.isoformat(), "end_utc": end_utc.isoformat()},
@@ -726,6 +882,7 @@ class Aggregator:
                 f"- **负载均值**：1m `{qqg_facts.get('loadavg', {}).get('1m_avg')}` (p95: `{qqg_facts.get('loadavg', {}).get('1m_p95')}`) / 5m `{qqg_facts.get('loadavg', {}).get('5m_avg')}`",
                 f"- **内存使用**：均值 `{qqg_facts.get('memory', {}).get('used_pct_avg')}%` / 峰值 `{qqg_facts.get('memory', {}).get('used_pct_max')}%`",
                 f"- **出站 IP 集合**：`{', '.join(geo.get('unique_egress_ips', [])) or 'None'}`",
+                f"- **Geo 区域集合**：`{', '.join(geo.get('unique_regions', [])) or 'None'}`",
                 f"- **Geo 漂移事件**：`{geo.get('drift_events_count')}` 次",
             ])
         else:
@@ -734,20 +891,26 @@ class Aggregator:
         # Cloudflare Server Monitor section
         md_lines.extend([
             "",
-            "## 4. Cloudflare Server Monitor 24h 历史时序与存活",
+            "## 4. Cloudflare Server Monitor 历史时序与存活",
             "",
         ])
         if cf_facts.get("status") == "ok":
             md_lines.extend([
                 f"- **纳管服务器总数**：`{cf_facts.get('servers_count')}` 台",
                 "",
-                "| 服务器名称 | 24h采样点 | CPU 均值 | 内存均值 | 电信丢包 | 联通丢包 | 电信时延 p50 |",
-                "|---|---|---|---|---|---|---|",
+                "| 服务器名称 | 在线状态 | 覆盖度 | 窗口采样点 | CPU 均值 | 内存均值 | 电信丢包 | 电信时延 p50 |",
+                "|---|---|---|---|---|---|---|---|",
             ])
             for sname, sstat in cf_facts.get("servers", {}).items():
+                on_label = "🟢 在线" if sstat.get("online") else "🔴 离线"
+                cov_label = sstat.get("coverage", "none")
+                cpu_disp = f"{sstat.get('cpu_avg_pct')}%" if sstat.get("cpu_avg_pct") is not None else "N/A"
+                ram_disp = f"{sstat.get('ram_avg_pct')}%" if sstat.get("ram_avg_pct") is not None else "N/A"
+                loss_disp = f"{sstat.get('loss_ct_avg')}%" if sstat.get('loss_ct_avg') is not None else "N/A"
+                ping_disp = f"{sstat.get('ping_ct_p50_ms')} ms" if sstat.get('ping_ct_p50_ms') is not None else "N/A"
                 md_lines.append(
-                    f"| `{sname}` | {sstat.get('recent_24h_points')} | {sstat.get('cpu_avg_pct')}% | {sstat.get('ram_avg_pct')}% | "
-                    f"{sstat.get('loss_ct_avg')}% | {sstat.get('loss_cu_avg')}% | {sstat.get('ping_ct_p50_ms')} ms |"
+                    f"| `{sname}` | {on_label} | `{cov_label}` | {sstat.get('window_points_count')} | {cpu_disp} | {ram_disp} | "
+                    f"{loss_disp} | {ping_disp} |"
                 )
         else:
             md_lines.append(f"*CF 历史拉取受限或未完成: {cf_facts.get('error', cf_facts.get('status'))}*")
@@ -777,7 +940,6 @@ class Aggregator:
             latest_json.symlink_to(json_file.name)
             latest_md.symlink_to(md_file.name)
         except OSError:
-            # Fallback to copy if symlink fails
             with open(latest_json, "w", encoding="utf-8") as f:
                 f.write(json_report_str)
             with open(latest_md, "w", encoding="utf-8") as f:
@@ -796,15 +958,19 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="AuroraOps Authoritative Metrics Aggregator & Weekly Reporter")
     parser.add_argument("--base-dir", default=str(DEFAULT_BASE_DIR), help="Base directory")
     parser.add_argument("--report-all", action="store_true", help="Run full aggregation, CF archival, and generate report")
+    parser.add_argument("--collect-cf", action="store_true", help="Run CF collection tick only")
     parser.add_argument("--days", type=int, default=7, help="Window days (default: 7)")
     args = parser.parse_args()
 
     aggregator = Aggregator(base_dir=Path(args.base_dir))
-    if args.report_all:
+    if args.collect_cf:
+        res = aggregator.collect_cf_history_tick()
+        print(json.dumps(res, indent=2))
+    elif args.report_all:
         paths = aggregator.generate_weekly_report(days=args.days)
         print(json.dumps(paths, indent=2))
     else:
-        print("Specify --report-all to generate report")
+        print("Specify --report-all or --collect-cf")
 
 
 if __name__ == "__main__":

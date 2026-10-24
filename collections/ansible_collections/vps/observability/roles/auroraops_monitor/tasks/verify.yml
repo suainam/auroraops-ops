@@ -175,13 +175,28 @@
           if key not in data:
               print(f'Missing required top-level key: {key}')
               sys.exit(3)
+      # Assert actual consumption of #357 and #358 inputs
+      ib_valid = data.get('instabox', {}).get('samples', {}).get('valid_runs', 0)
+      if ib_valid <= 0:
+          print(f'Instabox records not consumed: valid_runs={ib_valid}')
+          sys.exit(5)
+
+      qqg_valid = data.get('qqg1299', {}).get('samples', {}).get('valid_samples', 0)
+      if qqg_valid <= 0:
+          print(f'qqg1299 records not consumed: valid_samples={qqg_valid}')
+          sys.exit(6)
+
+      cf_srvs = data.get('cf_monitor', {}).get('servers_count', 0)
+      if cf_srvs < 8:
+          print(f'CF servers incomplete: count={cf_srvs}')
+          sys.exit(7)
 
       jev = data['jev_evaluation']
       if jev.get('status') not in ('evaluated', 'pending_review'):
           print(f'Invalid Jev status: {jev.get(\"status\")}')
           sys.exit(4)
 
-      print(f'SUCCESS: verified weekly report JSON and MD, Jev status: {jev.get(\"status\")}')
+      print(f'SUCCESS: verified report (instabox={ib_valid}, qqg={qqg_valid}, cf={cf_srvs}, jev={jev.get(\"status\")})')
       "
   register: auroraops_monitor_report_val
   changed_when: false
@@ -209,6 +224,15 @@
   register: auroraops_monitor_weekly_timer_status
   changed_when: false
   failed_when: auroraops_monitor_weekly_timer_status.stdout.strip() != 'active'
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [verify, observability, auroraops_monitor]
+
+- name: 验证 cf collector systemd timer 处于活动状态 (Aggregator)
+  ansible.builtin.command:
+    cmd: systemctl is-active auroraops_cf_collector.timer
+  register: auroraops_monitor_cf_timer_status
+  changed_when: false
+  failed_when: auroraops_monitor_cf_timer_status.stdout.strip() != 'active'
   when: auroraops_monitor_mode == 'aggregator'
   tags: [verify, observability, auroraops_monitor]
 

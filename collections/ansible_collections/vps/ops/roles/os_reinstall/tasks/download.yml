@@ -1,0 +1,7 @@
+---
+- name: 下载并校验重装脚本 (Download immutable reinstall script)
+  vps.ops.os_reinstall_execute:
+    action: download
+    script_url: "{{ os_reinstall_script_url }}"
+    script_path: "{{ os_reinstall_script_path }}"
+  tags: [deploy, ops, os_reinstall, phase6]

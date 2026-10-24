@@ -1,0 +1,10 @@
+---
+- name: 校验脚本哈希并配置 Debian 安装环境 (Prepare Debian install with checksum guard)
+  vps.ops.os_reinstall_execute:
+    action: prepare
+    script_path: "{{ os_reinstall_script_path }}"
+    debian_version: "{{ os_reinstall_debian_version }}"
+    ssh_pubkey: "{{ os_reinstall_ssh_pubkey }}"
+    ssh_port: "{{ os_reinstall_ssh_port }}"
+    username: "{{ os_reinstall_username }}"
+  tags: [deploy, ops, os_reinstall, phase6]

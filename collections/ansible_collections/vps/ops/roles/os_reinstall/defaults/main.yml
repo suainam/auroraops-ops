@@ -1,0 +1,43 @@
+---
+# =============================================================================
+# vps.ops.os_reinstall Defaults
+# =============================================================================
+
+# 统一接入 auroraops_roles 架构，默认完全禁用
+auroraops_roles:
+  ops:
+    os_reinstall: false
+
+# 破坏性操作必须显式二次确认
+os_reinstall_confirm: false
+
+# 操作员对目标主机外部备份与异地恢复手段的责任声明 (必须显式匹配目标主机名)
+os_reinstall_backup_operator_ack: ""
+# 目标系统 os-release 路径 (默认 /etc/os-release)
+os_reinstall_os_release_path: "/etc/os-release"
+
+# 目标系统版本 (官方 Debian 13 或 12)
+os_reinstall_debian_version: "13"
+
+# 安装后配置的用户名 (通过 --username root 消除交互)
+os_reinstall_username: "root"
+
+# SSH 访问端口
+os_reinstall_ssh_port: 22
+
+# 必须提供的 SSH 公钥认证内容 (严禁留空)
+os_reinstall_ssh_pubkey: ""
+
+# 固定上游 commit 与 SHA256 校验和 (第一阶段脚本严格不可变)
+os_reinstall_script_commit: "2252ca7615cd672dc1d9e67c52243db4ac859151"
+os_reinstall_script_sha256: "84daf5f1220ebdaf8e2d3db780e5f6b5d3a4d66a1fa70b353731662cd19a0010"
+
+# 上游脚本下载源 (国内源/GitHub 固定 commit)
+os_reinstall_script_url: "https://cnb.cool/bin456789/reinstall/-/git/raw/{{ os_reinstall_script_commit }}/reinstall.sh"
+# 海外备用: "https://raw.githubusercontent.com/bin456789/reinstall/{{ os_reinstall_script_commit }}/reinstall.sh"
+
+# 目标安装脚本缓存路径
+os_reinstall_script_path: "/root/reinstall.sh"
+
+# 是否在准备完成后立即触发重启进入安装环境 (默认 false, 需显式启用)
+os_reinstall_trigger_reboot: false

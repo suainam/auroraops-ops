@@ -1,0 +1,20 @@
+---
+- name: 未启用重装角色时跳过 (Skip when not enabled)
+  ansible.builtin.debug:
+    msg: "vps.ops.os_reinstall is disabled by default. Skipping execution safely."
+  when: not (auroraops_roles['ops']['os_reinstall'] | default(false) | bool)
+  tags: [deploy, ops, os_reinstall, phase6]
+
+- name: 纯净重装执行块 (Reinstall execution block)
+  when: auroraops_roles['ops']['os_reinstall'] | default(false) | bool
+  block:
+    - name: 导入下载任务 (Download reinstall script)
+      ansible.builtin.include_tasks: download.yml
+
+    - name: 导入重装配置任务 (Prepare Debian install)
+      ansible.builtin.include_tasks: prepare.yml
+
+    - name: 导入重启任务 (Reboot target host)
+      ansible.builtin.include_tasks: reboot.yml
+      when: os_reinstall_trigger_reboot | bool
+  tags: [deploy, ops, os_reinstall, phase6]

@@ -1,0 +1,5 @@
+---
+- name: 触发目标主机重启进入系统安装 (Trigger reboot into installer)
+  vps.ops.os_reinstall_execute:
+    action: reboot
+  tags: [deploy, ops, os_reinstall, phase6]

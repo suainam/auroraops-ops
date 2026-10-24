@@ -1,0 +1,775 @@
+---
+# Stage 4: Deploy / Apply
+# Persists baseline fact, creates directory, deploys scripts, and initializes spool.
+
+- name: 清理历史回滚审计快照 (若存在)
+  become: true
+  ansible.builtin.file:
+    path: "{{ auroraops_monitor_audit_file }}"
+    state: absent
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 确保 facts.d 目录存在
+  become: true
+  ansible.builtin.file:
+    path: /etc/ansible/facts.d
+    state: directory
+    mode: "0755"
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 捕获并固化部署前 Baseline Fact 与逐文件基线快照 (首次部署前原子固化，不覆盖)
+  become: true
+  args:
+    executable: /bin/bash
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 -c '
+    import os, sys, stat, json, shutil, pwd, grp, subprocess
+
+    monitor_dir = sys.argv[1]
+    spool_dir = sys.argv[2]
+    fact_path = sys.argv[3]
+    backup_dir = sys.argv[4]
+    max_spool_bytes = int(sys.argv[5])
+
+    if os.path.exists(fact_path):
+        sys.exit(0)
+    def get_meta(path):
+        if not os.path.lexists(path):
+            return {"exists": False, "pre_exists": False}
+        st = os.stat(path)
+        try:
+            owner = pwd.getpwuid(st.st_uid).pw_name
+        except Exception:
+            owner = str(st.st_uid)
+        try:
+            group = grp.getgrgid(st.st_gid).gr_name
+        except Exception:
+            group = str(st.st_gid)
+        mode = oct(stat.S_IMODE(st.st_mode))
+        return {
+            "exists": True,
+            "pre_exists": True,
+            "mode": mode,
+            "owner": owner,
+            "group": group,
+            "uid": st.st_uid,
+            "gid": st.st_gid
+        }
+
+    dir_meta = get_meta(monitor_dir)
+    spool_meta = get_meta(spool_dir)
+    scripts = ["spool_manager.py", "auroraops_probe.py", "ipquality_geo_probe.py", "auroraops_host_sampler.py", "auroraops_aggregator.py"]
+    runtime_files = ["spool.lock", "spool.jsonl", "metrics.jsonl", "geo_audit_cursor.json", "cf_token.json"]
+    system_files = [
+        "/etc/auroraops/auroraops_monitor.env",
+        "/etc/systemd/system/auroraops_weekly_report.service",
+        "/etc/systemd/system/auroraops_weekly_report.timer",
+        "/etc/systemd/system/auroraops_cf_collector.service",
+        "/etc/systemd/system/auroraops_cf_collector.timer",
+        "/etc/systemd/system/auroraops-monitor.service",
+        "/etc/systemd/system/auroraops-monitor.timer",
+    ]
+    os.makedirs(backup_dir, exist_ok=True)
+    os.chmod(backup_dir, 0o700)
+    files_meta = {}
+    for name in scripts:
+        p = os.path.join(monitor_dir, name)
+        meta = get_meta(p)
+        files_meta[name] = meta
+        if meta["exists"]:
+            shutil.copy2(p, os.path.join(backup_dir, name))
+
+    for name in runtime_files:
+        p = os.path.join(monitor_dir, name)
+        ex = os.path.lexists(p)
+        files_meta[name] = {"exists": ex, "pre_exists": ex}
+
+    sys_meta = {}
+    for sf in system_files:
+        meta = get_meta(sf)
+        sys_meta[sf] = meta
+        if meta["exists"]:
+            shutil.copy2(sf, os.path.join(backup_dir, f"sys_{os.path.basename(sf)}"))
+            if sf.endswith((".service", ".timer")):
+                uname = os.path.basename(sf)
+                try:
+                    res_en = subprocess.run(["systemctl", "is-enabled", uname], capture_output=True, text=True)
+                    meta["enabled"] = res_en.stdout.strip() in ("enabled", "linked", "linked-runtime", "static")
+                except Exception:
+                    meta["enabled"] = False
+                try:
+                    res_act = subprocess.run(["systemctl", "is-active", uname], capture_output=True, text=True)
+                    meta["active"] = res_act.stdout.strip() == "active"
+                except Exception:
+                    meta["active"] = False
+        else:
+            if sf.endswith((".service", ".timer")):
+                meta["enabled"] = False
+                meta["active"] = False
+    user_name = sys.argv[6]
+    group_name = sys.argv[7]
+    try:
+        pwd.getpwnam(user_name)
+        user_pre_exists = True
+    except KeyError:
+        user_pre_exists = False
+    try:
+        grp.getgrnam(group_name)
+        group_pre_exists = True
+    except KeyError:
+        group_pre_exists = False
+
+    fact_data = {
+        "auroraops_managed": True,
+        "version": 3,
+        "managed_dir": monitor_dir,
+        "pre_deploy_dir_exists": dir_meta["exists"],
+        "dir_metadata": dir_meta,
+        "spool_dir_metadata": spool_meta,
+        "files": files_meta,
+        "system_files": sys_meta,
+        "user_pre_exists": user_pre_exists,
+        "group_pre_exists": group_pre_exists,
+        "max_spool_bytes": max_spool_bytes
+    }
+
+    os.makedirs(os.path.dirname(fact_path), exist_ok=True)
+    tmp_path = fact_path + ".tmp"
+    with open(tmp_path, "w") as f:
+        json.dump(fact_data, f, indent=2)
+    os.replace(tmp_path, fact_path)
+    os.chmod(fact_path, 0o644)
+    ' "{{ auroraops_monitor_dir }}" "{{ auroraops_monitor_spool_dir }}" "{{ auroraops_monitor_fact_path }}" "{{ auroraops_monitor_backup_dir }}" "{{ auroraops_monitor_max_spool_bytes | default(52428800) }}" "{{ auroraops_monitor_user }}" "{{ auroraops_monitor_group }}"
+  when: not (auroraops_monitor_baseline_exists | default(false))
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 创建监控专用非特权系统组 (Host Metrics & Aggregator)
+  become: true
+  ansible.builtin.group:
+    name: "{{ auroraops_monitor_group }}"
+    system: true
+    state: present
+  when: auroraops_monitor_mode in ['host_metrics', 'aggregator']
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 创建监控专用非特权系统用户 (Host Metrics & Aggregator)
+  become: true
+  ansible.builtin.user:
+    name: "{{ auroraops_monitor_user }}"
+    group: "{{ auroraops_monitor_group }}"
+    home: "{{ auroraops_monitor_dir }}"
+    shell: /bin/bash
+    system: true
+    create_home: false
+    state: present
+  when: auroraops_monitor_mode in ['host_metrics', 'aggregator']
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 创建监控工作目录与 spool 目录
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ auroraops_monitor_user }}"
+    group: "{{ auroraops_monitor_group }}"
+    mode: "0755"
+  loop:
+    - "{{ auroraops_monitor_dir }}"
+    - "{{ auroraops_monitor_spool_dir }}"
+  tags: [deploy, observability, auroraops_monitor]
+
+
+- name: 创建 Aggregator 专属子目录 (Aggregator)
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ auroraops_monitor_user }}"
+    group: "{{ auroraops_monitor_group }}"
+    mode: "0755"
+  loop:
+    - "{{ auroraops_monitor_dir }}/spool_inbound"
+    - "{{ auroraops_monitor_dir }}/spool_inbound/instabox"
+    - "{{ auroraops_monitor_dir }}/spool_inbound/qqg1299"
+    - "{{ auroraops_monitor_dir }}/cf_history"
+    - "{{ auroraops_monitor_dir }}/reports"
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 恢复并合并未 ACK 归档数据 (确保回滚后不丢时序与 Spool，防历史断档)
+  become: true
+  args:
+    executable: /bin/bash
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 -c '
+    import os, sys, json, shutil, fcntl, pwd, grp, hashlib
+
+    archive_dir = sys.argv[1]
+    monitor_dir = sys.argv[2]
+    lock_file = sys.argv[3]
+    user = sys.argv[4]
+    group = sys.argv[5]
+
+    if not os.path.exists(archive_dir):
+        sys.exit(0)
+
+    def durable_copy_file(src, dst):
+        dst_dir = os.path.dirname(dst)
+        os.makedirs(dst_dir, exist_ok=True)
+        tmp_dst = dst + f".tmp.{os.getpid()}"
+        h_src = hashlib.sha256()
+        h_dst = hashlib.sha256()
+        with open(src, "rb") as f_in, open(tmp_dst, "wb") as f_out:
+            while chunk := f_in.read(65536):
+                h_src.update(chunk)
+                f_out.write(chunk)
+                h_dst.update(chunk)
+            f_out.flush()
+            os.fsync(f_out.fileno())
+        if h_src.digest() != h_dst.digest():
+            if os.path.exists(tmp_dst):
+                os.remove(tmp_dst)
+            raise IOError(f"SHA256 mismatch copying {src} -> {dst}")
+        os.replace(tmp_dst, dst)
+        dfd = os.open(dst_dir, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+
+    os.makedirs(os.path.dirname(lock_file), exist_ok=True)
+    with open(lock_file, "a") as lf:
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+        try:
+            # 1. Restore/merge cf_history
+            arch_cf = os.path.join(archive_dir, "cf_history")
+            target_cf = os.path.join(monitor_dir, "cf_history")
+            if os.path.isdir(arch_cf):
+                os.makedirs(target_cf, exist_ok=True)
+                for fname in os.listdir(arch_cf):
+                    if not fname.endswith(".json") or fname.startswith("."):
+                        continue
+                    arch_file = os.path.join(arch_cf, fname)
+                    target_file = os.path.join(target_cf, fname)
+                    with open(arch_file, "r", encoding="utf-8") as af:
+                        d = json.load(af)
+                        if not isinstance(d, list):
+                            raise ValueError(f"Archive file {arch_file} is not a valid JSON list")
+                        arch_points = d
+
+                    target_points = []
+                    if os.path.exists(target_file):
+                        with open(target_file, "r", encoding="utf-8") as tf:
+                            d = json.load(tf)
+                            if isinstance(d, list):
+                                target_points = d
+
+                    merged_map = {}
+                    for p in arch_points:
+                        ts = p.get("timestamp")
+                        if ts:
+                            merged_map[ts] = p
+                    for p in target_points:
+                        ts = p.get("timestamp")
+                        if ts:
+                            merged_map[ts] = p
+
+                    merged_list = sorted(merged_map.values(), key=lambda x: str(x.get("timestamp") or ""))
+                    tmp_tf = target_file + f".tmp.{os.getpid()}"
+                    with open(tmp_tf, "w", encoding="utf-8") as tf:
+                        json.dump(merged_list, tf, indent=1)
+                        tf.flush()
+                        os.fsync(tf.fileno())
+                    os.replace(tmp_tf, target_file)
+                    dfd = os.open(target_cf, os.O_RDONLY)
+                    try:
+                        os.fsync(dfd)
+                    finally:
+                        os.close(dfd)
+
+            # 2. Restore/merge spool_inbound
+            arch_ib = os.path.join(archive_dir, "spool_inbound")
+            target_ib = os.path.join(monitor_dir, "spool_inbound")
+            if os.path.isdir(arch_ib):
+                for sub in os.listdir(arch_ib):
+                    src_sub = os.path.join(arch_ib, sub)
+                    dst_sub = os.path.join(target_ib, sub)
+                    if os.path.isdir(src_sub):
+                        os.makedirs(dst_sub, exist_ok=True)
+                        for f in os.listdir(src_sub):
+                            if f.startswith("."):
+                                continue
+                            sf = os.path.join(src_sub, f)
+                            df = os.path.join(dst_sub, f)
+                            if not os.path.exists(df):
+                                durable_copy_file(sf, df)
+                            else:
+                                seen_keys = set()
+                                lines = []
+                                with open(df, "r", encoding="utf-8") as in_f:
+                                    for line in in_f:
+                                        l = line.strip()
+                                        if l:
+                                            try:
+                                                rec = json.loads(l)
+                                                k = rec.get("run_id") or rec.get("timestamp_utc") or l
+                                                seen_keys.add(k)
+                                                lines.append(l)
+                                            except Exception:
+                                                lines.append(l)
+                                with open(sf, "r", encoding="utf-8") as in_f:
+                                    for line in in_f:
+                                        l = line.strip()
+                                        if l:
+                                            try:
+                                                rec = json.loads(l)
+                                                k = rec.get("run_id") or rec.get("timestamp_utc") or l
+                                                if k not in seen_keys:
+                                                    seen_keys.add(k)
+                                                    lines.append(l)
+                                            except Exception:
+                                                lines.append(l)
+                                tmp_df = df + f".tmp.{os.getpid()}"
+                                with open(tmp_df, "w", encoding="utf-8") as out_f:
+                                    for l in lines:
+                                        out_f.write(l + "\n")
+                                    out_f.flush()
+                                    os.fsync(out_f.fileno())
+                                os.replace(tmp_df, df)
+                                dfd = os.open(dst_sub, os.O_RDONLY)
+                                try:
+                                    os.fsync(dfd)
+                                finally:
+                                    os.close(dfd)
+
+            # 3. Restore/merge spool
+            arch_spool = os.path.join(archive_dir, "spool")
+            target_spool = os.path.join(monitor_dir, "spool")
+            if os.path.isdir(arch_spool):
+                os.makedirs(target_spool, exist_ok=True)
+                for f in os.listdir(arch_spool):
+                    if not f.startswith("."):
+                        sf = os.path.join(arch_spool, f)
+                        df = os.path.join(target_spool, f)
+                        if not os.path.exists(df):
+                            durable_copy_file(sf, df)
+
+            # 4. Restore preserved active spool
+            for f in os.listdir(archive_dir):
+                if f.startswith("spool-preserved-") and f.endswith(".jsonl"):
+                    sf = os.path.join(archive_dir, f)
+                    target_spool_dir = os.path.join(monitor_dir, "spool")
+                    os.makedirs(target_spool_dir, exist_ok=True)
+                    df = os.path.join(target_spool_dir, f)
+                    if not os.path.exists(df):
+                        durable_copy_file(sf, df)
+
+            # 5. Restore reports
+            arch_rep = os.path.join(archive_dir, "reports")
+            target_rep = os.path.join(monitor_dir, "reports")
+            if os.path.isdir(arch_rep):
+                os.makedirs(target_rep, exist_ok=True)
+                for f in os.listdir(arch_rep):
+                    if not f.startswith("."):
+                        sf = os.path.join(arch_rep, f)
+                        df = os.path.join(target_rep, f)
+                        if not os.path.exists(df):
+                            durable_copy_file(sf, df)
+
+            # Ensure correct ownership BEFORE removing archive
+            uid = pwd.getpwnam(user).pw_uid
+            gid = grp.getgrnam(group).gr_gid
+            for root, dirs, files in os.walk(monitor_dir):
+                for d in dirs:
+                    os.chown(os.path.join(root, d), uid, gid)
+                for f in files:
+                    os.chown(os.path.join(root, f), uid, gid)
+
+            # Clean archive_dir only now that all fsync and ownership confirmations succeeded
+            shutil.rmtree(archive_dir)
+        finally:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+    ' "{{ auroraops_monitor_unacked_archive_dir }}" "{{ auroraops_monitor_dir }}" "{{ auroraops_monitor_lock_file }}" "{{ auroraops_monitor_user }}" "{{ auroraops_monitor_group }}"
+  tags: [deploy, observability, auroraops_monitor]
+- name: 部署 auroraops_aggregator.py 汇总与周报生成器 (Aggregator)
+  become: true
+  ansible.builtin.copy:
+    src: auroraops_aggregator.py
+    dest: "{{ auroraops_monitor_dir }}/auroraops_aggregator.py"
+    owner: "{{ auroraops_monitor_user }}"
+    group: "{{ auroraops_monitor_group }}"
+    mode: "0755"
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 确保 /etc/auroraops 配置目录存在 (Aggregator)
+  become: true
+  ansible.builtin.file:
+    path: /etc/auroraops
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [deploy, observability, auroraops_monitor]
+- name: 从 Magpie 获取 TypeSafe Provider 凭据 (Aggregator)
+  become: true
+  no_log: true
+  check_mode: false
+  ansible.builtin.shell: |
+    python3 -c '
+    import json
+    with open("/opt/dockers/magpie/config/magpie/providers.json") as f:
+        d = json.load(f)
+    for p in d.get("providers", []):
+        if p.get("id") == "typesafe":
+            print(p.get("key", ""))
+            break
+    '
+  register: auroraops_monitor_magpie_typesafe_key
+  changed_when: false
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 /etc/auroraops/auroraops_monitor.env 敏感配置 (Aggregator)
+  become: true
+  no_log: true
+  ansible.builtin.copy:
+    dest: /etc/auroraops/auroraops_monitor.env
+    owner: "{{ auroraops_monitor_user }}"
+    group: "{{ auroraops_monitor_group }}"
+    mode: "0600"
+    content: |
+      CF_ADMIN_PASSWORD={{ vault_opcotoai_smtp_freemail_worker_admin_pwd | default('') }}
+      CF_WORKER_URL={{ cf_probe_worker_url | default('https://cf-server-monitor.suainam.workers.dev') }}
+      TYPESAFE_API_KEY={{ auroraops_monitor_magpie_typesafe_key.stdout | default('') }}
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 auroraops_weekly_report.service systemd unit (Aggregator)
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/auroraops_weekly_report.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=AuroraOps Authoritative Metrics Aggregator & Weekly Reporter
+      After=network.target
+
+      [Service]
+      Type=oneshot
+      User={{ auroraops_monitor_user }}
+      Group={{ auroraops_monitor_group }}
+      EnvironmentFile=-/etc/auroraops/auroraops_monitor.env
+      ExecStart=/usr/bin/python3 {{ auroraops_monitor_dir }}/auroraops_aggregator.py --report-all
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 auroraops_weekly_report.timer systemd unit (Aggregator)
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/auroraops_weekly_report.timer
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=AuroraOps Weekly Reporter Timer
+
+      [Timer]
+      OnCalendar=Mon *-*-* 02:00:00
+      Persistent=true
+      AccuracySec=1min
+
+      [Install]
+      WantedBy=timers.target
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 重载 systemd 并启动 weekly report timer (Aggregator)
+  become: true
+  ansible.builtin.systemd:
+    name: auroraops_weekly_report.timer
+    daemon_reload: true
+    state: started
+    enabled: true
+  when:
+    - auroraops_monitor_mode == 'aggregator'
+    - not ansible_check_mode
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 auroraops_cf_collector.service systemd unit (Aggregator)
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/auroraops_cf_collector.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=AuroraOps Cloudflare Server Monitor Periodic Collector
+      After=network.target
+
+      [Service]
+      Type=oneshot
+      User={{ auroraops_monitor_user }}
+      Group={{ auroraops_monitor_group }}
+      EnvironmentFile=-/etc/auroraops/auroraops_monitor.env
+      ExecStart=/usr/bin/python3 {{ auroraops_monitor_dir }}/auroraops_aggregator.py --collect-cf
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 auroraops_cf_collector.timer systemd unit (Aggregator)
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/auroraops_cf_collector.timer
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=AuroraOps Cloudflare Server Monitor Collector Timer (4h)
+
+      [Timer]
+      OnBootSec=2min
+      OnUnitActiveSec=4h
+      AccuracySec=1min
+
+      [Install]
+      WantedBy=timers.target
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 重载 systemd 并启动 CF collector timer (Aggregator)
+  become: true
+  ansible.builtin.systemd:
+    name: auroraops_cf_collector.timer
+    daemon_reload: true
+    state: started
+    enabled: true
+  when:
+    - auroraops_monitor_mode == 'aggregator'
+    - not ansible_check_mode
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 spool_manager.py 管理器
+  become: true
+  ansible.builtin.copy:
+    src: spool_manager.py
+    dest: "{{ auroraops_monitor_dir }}/spool_manager.py"
+    owner: "{{ auroraops_monitor_user }}"
+    group: "{{ auroraops_monitor_group }}"
+    mode: "0755"
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 auroraops_probe.py 探针程序 (Instabox)
+  become: true
+  ansible.builtin.copy:
+    src: auroraops_probe.py
+    dest: "{{ auroraops_monitor_dir }}/auroraops_probe.py"
+    owner: "{{ auroraops_monitor_user }}"
+    group: "{{ auroraops_monitor_group }}"
+    mode: "0755"
+  when: auroraops_monitor_mode == 'outer_probe'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 ipquality_geo_probe.py 依赖库 (Instabox)
+  become: true
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../../../ops/roles/ipquality/files/ipquality_geo_probe.py"
+    dest: "{{ auroraops_monitor_dir }}/ipquality_geo_probe.py"
+    owner: "{{ auroraops_monitor_user }}"
+    group: "{{ auroraops_monitor_group }}"
+    mode: "0755"
+  when: auroraops_monitor_mode == 'outer_probe'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 auroraops_host_sampler.py 采样器 (Host Metrics)
+  become: true
+  ansible.builtin.copy:
+    src: auroraops_host_sampler.py
+    dest: "{{ auroraops_monitor_dir }}/auroraops_host_sampler.py"
+    owner: "{{ auroraops_monitor_user }}"
+    group: "{{ auroraops_monitor_group }}"
+    mode: "0755"
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 auroraops-monitor.service systemd unit (Host Metrics)
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/auroraops-monitor.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=AuroraOps Host Metrics & Geo Cursor Sampler
+      After=network.target
+
+      [Service]
+      Type=oneshot
+      User={{ auroraops_monitor_user }}
+      Group={{ auroraops_monitor_group }}
+      ExecStart=/usr/bin/python3 {{ auroraops_monitor_dir }}/auroraops_host_sampler.py
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 auroraops-monitor.timer systemd unit (Host Metrics)
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/auroraops-monitor.timer
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=AuroraOps Host Metrics & Geo Cursor Sampler Timer (5min)
+
+      [Timer]
+      OnBootSec=1min
+      OnUnitActiveSec=5min
+      AccuracySec=10s
+
+      [Install]
+      WantedBy=timers.target
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 重载 systemd 并启动 timer (Host Metrics)
+  become: true
+  ansible.builtin.systemd:
+    name: auroraops-monitor.timer
+    daemon_reload: true
+    state: started
+    enabled: true
+  when:
+    - auroraops_monitor_mode == 'host_metrics'
+    - not ansible_check_mode
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 确保控制端专用受限拉取密钥存在 (Darwin Controller)
+  delegate_to: localhost
+  ansible.builtin.shell: |
+    set -euo pipefail
+    key_dir="{{ lookup('env', 'HOME') }}/.auroraops/keys"
+    mkdir -p "$key_dir"
+    chmod 700 "$key_dir"
+    key_path="$key_dir/qqg1299_monitor_puller_ed25519"
+    if [ ! -f "$key_path" ]; then
+      ssh-keygen -t ed25519 -N "" -C "auroraops-monitor-puller@qqg1299" -f "$key_path"
+      chmod 600 "$key_path"
+    fi
+  changed_when: false
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 读取控制端专用受限拉取公钥 (Darwin Controller)
+  delegate_to: localhost
+  ansible.builtin.slurp:
+    path: "{{ lookup('env', 'HOME') }}/.auroraops/keys/qqg1299_monitor_puller_ed25519.pub"
+  register: auroraops_monitor_puller_pubkey_raw
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 auroraops_spool_puller_guard.py 受限命令防护脚本 (qqg1299)
+  become: true
+  ansible.builtin.copy:
+    src: auroraops_spool_puller_guard.py
+    dest: /usr/local/bin/auroraops_spool_puller_guard.py
+    owner: root
+    group: root
+    mode: "0755"
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 确保监控专用非特权用户 .ssh 目录存在 (qqg1299)
+  become: true
+  ansible.builtin.file:
+    path: "{{ auroraops_monitor_dir }}/.ssh"
+    state: directory
+    owner: "{{ auroraops_monitor_user }}"
+    group: "{{ auroraops_monitor_group }}"
+    mode: "0700"
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 授权受限拉取密钥至专用非特权用户 (qqg1299)
+  become: true
+  ansible.posix.authorized_key:
+    user: "{{ auroraops_monitor_user }}"
+    key: "{{ auroraops_monitor_puller_pubkey_raw.content | b64decode }}"
+    key_options: 'command="/usr/local/bin/auroraops_spool_puller_guard.py",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty'
+    comment: "auroraops-monitor-puller@qqg1299"
+    state: present
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 确保 root authorized_keys 中不残留受限拉取公钥 (qqg1299)
+  become: true
+  ansible.posix.authorized_key:
+    user: root
+    key: "{{ auroraops_monitor_puller_pubkey_raw.content | b64decode }}"
+    state: absent
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [deploy, observability, auroraops_monitor]
+- name: 纳入控制端 LaunchAgent 跨平台定时调度管理 (Darwin Controller)
+  ansible.builtin.include_tasks: controller_scheduler_apply.yml
+  when:
+    - not ansible_check_mode
+  tags: [deploy, observability, auroraops_monitor]
+
+
+- name: 初始化探针并生成首条 Bounded Spool 记录 (Instabox)
+  become: true
+  become_user: "{{ auroraops_monitor_user }}"
+  ansible.builtin.command:
+    cmd: "python3 {{ auroraops_monitor_dir }}/auroraops_probe.py"
+  register: auroraops_monitor_init_run
+  changed_when: true
+  when:
+    - auroraops_monitor_mode == 'outer_probe'
+    - not ansible_check_mode
+    - not (auroraops_monitor_preflight_dir_stat.stat.exists | default(false))
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 执行初次采样并生成首条 Host Metrics 记录 (Host Metrics)
+  become: true
+  ansible.builtin.command:
+    cmd: "python3 {{ auroraops_monitor_dir }}/auroraops_host_sampler.py"
+  register: auroraops_monitor_init_host_sample
+  changed_when: true
+  when:
+    - auroraops_monitor_mode == 'host_metrics'
+    - not ansible_check_mode
+    - not (auroraops_monitor_preflight_dir_stat.stat.exists | default(false))
+  tags: [deploy, observability, auroraops_monitor]
+
+
+- name: 立即触发首轮控制端 Spool 同步 (Aggregator)
+  delegate_to: localhost
+  ansible.builtin.command:
+    cmd: "python3 {{ lookup('env', 'HOME') }}/.auroraops/bin/cc15_spool_pusher.py --ssh-target {{ inventory_hostname }}"
+  register: auroraops_monitor_spool_push
+  changed_when: false
+  when:
+    - auroraops_monitor_mode == 'aggregator'
+    - not ansible_check_mode
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 执行初次指标汇总与周报生成 (Aggregator)
+  become: true
+  become_user: "{{ auroraops_monitor_user }}"
+  ansible.builtin.command:
+    cmd: "python3 {{ auroraops_monitor_dir }}/auroraops_aggregator.py --report-all"
+  register: auroraops_monitor_init_report
+  changed_when: true
+  when:
+    - auroraops_monitor_mode == 'aggregator'
+    - not ansible_check_mode
+    - not (auroraops_monitor_preflight_dir_stat.stat.exists | default(false))
+  tags: [deploy, observability, auroraops_monitor]

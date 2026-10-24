@@ -1,0 +1,136 @@
+---
+# Controller LaunchAgent deployment via universal managed_timer task library
+
+- name: 清理历史控制端回滚审计快照 (若存在)
+  delegate_to: localhost
+  ansible.builtin.file:
+    path: "{{ lookup('env', 'HOME') }}/.auroraops/state/{{ controller_timer_name | default('com.auroraops.instabox-scheduler') }}.audit.json"
+    state: absent
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 捕获控制端调度器 Pre-deploy Baseline (若未初始化基线)
+  delegate_to: localhost
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 -c '
+    import os, sys, json, shutil, subprocess, stat
+
+    timer_name = sys.argv[1]
+    home = sys.argv[2]
+    state_dir = sys.argv[3]
+    baseline_file = sys.argv[4]
+    backup_dir = sys.argv[5]
+
+    if os.path.exists(baseline_file):
+        sys.exit(0)
+
+    os.makedirs(state_dir, exist_ok=True)
+    os.makedirs(backup_dir, exist_ok=True)
+
+    plist_path = os.path.join(home, "Library/LaunchAgents", f"{timer_name}.plist")
+    timer_script = sys.argv[6]
+    scripts = [timer_script, "instabox_scheduler_tick.py"] if timer_script == "instabox_scheduler_tick.sh" else [timer_script]
+    bin_dir = os.path.join(home, ".auroraops/bin")
+
+    artifact_host = "cc15" if timer_name == "com.auroraops.cc15-spool-pusher" else ("qqg1299" if timer_name == "com.auroraops.qqg1299-spool-puller" else "instabox")
+    before_artifact = f"/Users/suai/work/projects/auroraops-control/.worktrees/instabox-sandbox/artifacts/{artifact_host}-monitoring-before.json"
+    if not os.path.exists(before_artifact):
+        before_artifact = f"/Users/suai/work/projects/auroraops-control/artifacts/{artifact_host}-monitoring-before.json"
+
+    legacy_artifact_absent = False
+    if os.path.exists(before_artifact):
+        try:
+            with open(before_artifact) as bf:
+                bdata = json.load(bf)
+                la = bdata.get("observed_pre_deploy_state", {}).get("controller_launchagent", {})
+                if la.get("pre_existing") is False:
+                    legacy_artifact_absent = True
+        except Exception:
+            pass
+    plist_exists = False
+    plist_loaded = False
+    plist_meta = {}
+
+    if legacy_artifact_absent:
+        plist_exists = False
+        plist_loaded = False
+    else:
+        plist_exists = os.path.isfile(plist_path)
+        if plist_exists:
+            shutil.copy2(plist_path, os.path.join(backup_dir, f"{timer_name}.plist"))
+            plist_meta["mode"] = oct(stat.S_IMODE(os.stat(plist_path).st_mode))
+        try:
+            res = subprocess.run(["launchctl", "list"], capture_output=True, text=True, check=True)
+            plist_loaded = timer_name in res.stdout
+        except Exception:
+            plist_loaded = False
+
+    scripts_meta = {}
+    for s in scripts:
+        sp = os.path.join(bin_dir, s)
+        if legacy_artifact_absent:
+            scripts_meta[s] = {"path": sp, "pre_exists": False}
+        else:
+            ex = os.path.isfile(sp)
+            scripts_meta[s] = {"path": sp, "pre_exists": ex}
+            if ex:
+                shutil.copy2(sp, os.path.join(backup_dir, s))
+                scripts_meta[s]["mode"] = oct(stat.S_IMODE(os.stat(sp).st_mode))
+
+    baseline_data = {
+        "timer_name": timer_name,
+        "plist": {
+            "path": plist_path,
+            "pre_exists": plist_exists,
+            "loaded": plist_loaded,
+            **plist_meta
+        },
+        "scripts": scripts_meta
+    }
+
+    tmp_file = baseline_file + ".tmp"
+    with open(tmp_file, "w") as f:
+        json.dump(baseline_data, f, indent=2)
+    os.replace(tmp_file, baseline_file)
+    ' "{{ controller_timer_name | default('com.auroraops.instabox-scheduler') }}" "{{ lookup('env', 'HOME') }}" "{{ lookup('env', 'HOME') }}/.auroraops/state" "{{ lookup('env', 'HOME') }}/.auroraops/state/{{ controller_timer_name | default('com.auroraops.instabox-scheduler') }}.baseline.json" "{{ lookup('env', 'HOME') }}/.auroraops/state/{{ controller_timer_name | default('com.auroraops.instabox-scheduler') }}_backup" "{{ controller_timer_script }}"
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 确保控制端脚本目录存在 (Darwin Controller)
+  delegate_to: localhost
+  ansible.builtin.file:
+    path: "{{ lookup('env', 'HOME') }}/.auroraops/bin"
+    state: directory
+    mode: "0755"
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 确保控制端日志目录存在 (Darwin Controller)
+  delegate_to: localhost
+  ansible.builtin.file:
+    path: "{{ lookup('env', 'HOME') }}/Library/Logs/AuroraOps"
+    state: directory
+    mode: "0755"
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署控制端调度脚本至稳定路径 (Darwin Controller)
+  delegate_to: localhost
+  ansible.builtin.copy:
+    src: "{{ role_path }}/files/{{ item }}"
+    dest: "{{ lookup('env', 'HOME') }}/.auroraops/bin/{{ item }}"
+    mode: "0755"
+  loop: "{{ [controller_timer_script, 'instabox_scheduler_tick.py'] if controller_timer_script == 'instabox_scheduler_tick.sh' else [controller_timer_script] }}"
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 调用通用 managed_timer 管理控制端 LaunchAgent (Darwin Controller)
+  ansible.builtin.include_tasks:
+    file: "{{ role_path }}/../../../common/tasks/managed_timer.yml"
+  vars:
+    timer_name: "{{ controller_timer_name }}"
+    timer_description: "{{ controller_timer_description }}"
+    timer_exec_start: "{{ lookup('env', 'HOME') }}/.auroraops/bin/{{ controller_timer_script }}"
+    timer_exec_args: "{{ ['/usr/bin/python3', lookup('env', 'HOME') ~ '/.auroraops/bin/cc15_spool_pusher.py', '--ssh-target', inventory_hostname] if auroraops_monitor_mode == 'aggregator' else ['/bin/bash', lookup('env', 'HOME') ~ '/.auroraops/bin/' ~ controller_timer_script] }}"
+    timer_interval_seconds: "{{ controller_timer_interval }}"
+    timer_log_dir: "{{ lookup('env', 'HOME') }}/Library/Logs/AuroraOps"
+    timer_init_system: "darwin"
+    timer_enabled: true
+    timer_state: started
+  tags: [deploy, observability, auroraops_monitor]

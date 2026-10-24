@@ -1,0 +1,81 @@
+---
+# Controller LaunchAgent rollback via universal managed_timer task library
+
+- name: 调用通用 managed_timer 卸载并清理控制端 LaunchAgent (Darwin Controller)
+  ansible.builtin.include_tasks:
+    file: "{{ role_path }}/../../../common/tasks/managed_timer.yml"
+  vars:
+    timer_name: "{{ controller_timer_name }}"
+    timer_exec_start: "{{ lookup('env', 'HOME') }}/.auroraops/bin/{{ controller_timer_script }}"
+    timer_init_system: "darwin"
+    timer_enabled: false
+    timer_state: stopped
+  tags: [rollback, observability, auroraops_monitor]
+
+- name: 恢复控制端 LaunchAgent 与脚本至 Pre-deploy Baseline
+  delegate_to: localhost
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 -c '
+    import os, sys, json, shutil, subprocess, stat
+
+    timer_name = sys.argv[1]
+    home = sys.argv[2]
+    state_dir = sys.argv[3]
+    baseline_file = sys.argv[4]
+    backup_dir = sys.argv[5]
+    audit_file = sys.argv[6]
+
+    plist_path = os.path.join(home, "Library/LaunchAgents", f"{timer_name}.plist")
+    bin_dir = os.path.join(home, ".auroraops/bin")
+    timer_script = sys.argv[7]
+    scripts = [timer_script, "instabox_scheduler_tick.py"] if timer_script == "instabox_scheduler_tick.sh" else [timer_script]
+    if not os.path.exists(baseline_file):
+        if os.path.lexists(plist_path):
+            os.remove(plist_path)
+        for s in scripts:
+            sp = os.path.join(bin_dir, s)
+            if os.path.lexists(sp):
+                os.remove(sp)
+        sys.exit(0)
+
+    with open(baseline_file, "r") as f:
+        bdata = json.load(f)
+
+    with open(audit_file, "w") as f:
+        json.dump(bdata, f, indent=2)
+
+    plist_info = bdata.get("plist", {})
+    if plist_info.get("pre_exists", False):
+        src_plist = os.path.join(backup_dir, f"{timer_name}.plist")
+        if os.path.exists(src_plist):
+            shutil.copy2(src_plist, plist_path)
+            if "mode" in plist_info:
+                os.chmod(plist_path, int(plist_info["mode"], 8))
+    else:
+        if os.path.lexists(plist_path):
+            os.remove(plist_path)
+
+    scripts_info = bdata.get("scripts", {})
+    for s, sinfo in scripts_info.items():
+        sp = sinfo.get("path", os.path.join(bin_dir, s))
+        if sinfo.get("pre_exists", False):
+            src = os.path.join(backup_dir, s)
+            if os.path.exists(src):
+                shutil.copy2(src, sp)
+                if "mode" in sinfo:
+                    os.chmod(sp, int(sinfo["mode"], 8))
+        else:
+            if os.path.lexists(sp):
+                os.remove(sp)
+
+    # Load old job only after all plists and scripts are fully restored on disk
+    if plist_info.get("pre_exists", False) and plist_info.get("loaded", False):
+        subprocess.run(["launchctl", "unload", plist_path], capture_output=True)
+        subprocess.run(["launchctl", "load", "-w", plist_path], check=True)
+    if os.path.exists(baseline_file):
+        os.remove(baseline_file)
+    if os.path.exists(backup_dir):
+        shutil.rmtree(backup_dir)
+    ' "{{ controller_timer_name | default('com.auroraops.instabox-scheduler') }}" "{{ lookup('env', 'HOME') }}" "{{ lookup('env', 'HOME') }}/.auroraops/state" "{{ lookup('env', 'HOME') }}/.auroraops/state/{{ controller_timer_name | default('com.auroraops.instabox-scheduler') }}.baseline.json" "{{ lookup('env', 'HOME') }}/.auroraops/state/{{ controller_timer_name | default('com.auroraops.instabox-scheduler') }}_backup" "{{ lookup('env', 'HOME') }}/.auroraops/state/{{ controller_timer_name | default('com.auroraops.instabox-scheduler') }}.audit.json" "{{ controller_timer_script }}"
+  tags: [rollback, observability, auroraops_monitor]

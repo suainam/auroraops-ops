@@ -1,0 +1,12 @@
+---
+# Tasks entrypoint for auroraops_monitor role
+
+- name: 导入 preflight 探测
+  ansible.builtin.include_tasks: preflight.yml
+  when: auroraops_monitor_enabled | bool
+  tags: [deploy, check, preflight, verify, observability, auroraops_monitor]
+
+- name: 执行 apply 部署
+  ansible.builtin.include_tasks: apply.yml
+  when: auroraops_monitor_enabled | bool
+  tags: [deploy, check, observability, auroraops_monitor]

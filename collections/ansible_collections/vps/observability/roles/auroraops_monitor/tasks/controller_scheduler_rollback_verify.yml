@@ -1,0 +1,51 @@
+---
+- name: 审计验证控制端 LaunchAgent 与脚本回滚终态 (Darwin Controller)
+  delegate_to: localhost
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 -c '
+    import os, sys, json, subprocess
+
+    timer_name = sys.argv[1]
+    home = sys.argv[2]
+    audit_file = sys.argv[3]
+
+    plist_path = os.path.join(home, "Library/LaunchAgents", f"{timer_name}.plist")
+    bin_dir = os.path.join(home, ".auroraops/bin")
+    timer_script = sys.argv[4]
+    scripts = [timer_script, "instabox_scheduler_tick.py"] if timer_script == "instabox_scheduler_tick.sh" else [timer_script]
+    res = subprocess.run(["launchctl", "list"], capture_output=True, text=True, check=True)
+    is_loaded = timer_name in res.stdout
+
+    if not os.path.exists(audit_file):
+        assert not os.path.lexists(plist_path), f"Plist {plist_path} should be absent"
+        assert not is_loaded, f"Job {timer_name} still loaded in launchctl list"
+        for s in scripts:
+            sp = os.path.join(bin_dir, s)
+            assert not os.path.lexists(sp), f"Script {sp} should be absent"
+        sys.exit(0)
+
+    with open(audit_file, "r") as f:
+        bdata = json.load(f)
+
+    plist_info = bdata.get("plist", {})
+    if plist_info.get("pre_exists", False):
+        assert os.path.isfile(plist_path), f"Plist {plist_path} was pre-existing but is missing"
+        if plist_info.get("loaded", False):
+            assert is_loaded, f"Job {timer_name} should be loaded in launchd but is not"
+        else:
+            assert not is_loaded, f"Job {timer_name} should be unloaded in launchd but is loaded"
+    else:
+        assert not os.path.lexists(plist_path), f"Plist {plist_path} should be absent"
+        assert not is_loaded, f"Job {timer_name} still loaded in launchd"
+
+    scripts_info = bdata.get("scripts", {})
+    for s, sinfo in scripts_info.items():
+        sp = sinfo.get("path", os.path.join(bin_dir, s))
+        if sinfo.get("pre_exists", False):
+            assert os.path.isfile(sp), f"Script {sp} was pre-existing but is missing"
+        else:
+            assert not os.path.lexists(sp), f"Script {sp} should be absent"
+    ' "{{ controller_timer_name | default('com.auroraops.instabox-scheduler') }}" "{{ lookup('env', 'HOME') }}" "{{ lookup('env', 'HOME') }}/.auroraops/state/{{ controller_timer_name | default('com.auroraops.instabox-scheduler') }}.audit.json" "{{ controller_timer_script }}"
+  changed_when: false
+  tags: [rollback_verify, observability, auroraops_monitor]

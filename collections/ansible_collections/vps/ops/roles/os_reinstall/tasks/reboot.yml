@@ -1,0 +1,10 @@
+---
+- name: 发起目标主机重启进入系统安装环境
+  ansible.builtin.command:
+    argv:
+      - "shutdown"
+      - "-r"
+      - "now"
+  register: os_reinstall_reboot_res
+  changed_when: true
+  tags: [deploy, ops, os_reinstall, phase6]

@@ -1,0 +1,8 @@
+---
+- name: 下载 bin456789/reinstall.sh 重装脚本
+  ansible.builtin.get_url:
+    url: "{{ os_reinstall_script_url }}"
+    dest: "{{ os_reinstall_script_path }}"
+    mode: "0755"
+    timeout: 30
+  tags: [deploy, ops, os_reinstall, phase6]

@@ -1,0 +1,16 @@
+---
+- name: 执行 reinstall.sh 配置 Debian 目标系统与环境
+  ansible.builtin.command:
+    argv:
+      - "{{ os_reinstall_script_path }}"
+      - "debian"
+      - "{{ os_reinstall_debian_version }}"
+      - "--ssh-key"
+      - "{{ os_reinstall_ssh_pubkey | trim }}"
+      - "--ssh-port"
+      - "{{ os_reinstall_ssh_port | string }}"
+      - "--username"
+      - "{{ os_reinstall_username | trim }}"
+  register: os_reinstall_prepare_res
+  changed_when: true
+  tags: [deploy, ops, os_reinstall, phase6]

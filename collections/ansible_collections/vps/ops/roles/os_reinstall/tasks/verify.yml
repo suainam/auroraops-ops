@@ -1,0 +1,110 @@
+---
+# =============================================================================
+# vps.ops.os_reinstall Read-Only System & Cleanliness Verification
+# =============================================================================
+
+- name: 读取目标主机 /etc/os-release
+  ansible.builtin.slurp:
+    path: /etc/os-release
+  register: os_reinstall_os_release_raw
+  tags: [verify, ops, os_reinstall, phase6]
+
+- name: 解析 os-release 内容并严格断言官方 Debian 目标版本
+  vars:
+    os_release_text: "{{ os_reinstall_os_release_raw.content | b64decode }}"
+  ansible.builtin.assert:
+    that:
+      - "'ID=debian' in os_release_text"
+      - "('VERSION_ID=\"' ~ os_reinstall_debian_version ~ '\"') in os_release_text"
+    fail_msg: >-
+      目标系统 /etc/os-release 校验失败。系统未进入正式 Debian {{ os_reinstall_debian_version }} 系统
+      （可能仍处于内存 installer 救援环境或非目标版本）。
+    quiet: true
+  tags: [verify, ops, os_reinstall, phase6]
+
+- name: 检查云厂商监控遗留目录 (/usr/local/qcloud 等)
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /usr/local/qcloud
+    - /usr/local/sa
+    - /usr/local/agenttools
+  register: os_reinstall_vendor_dirs
+  tags: [verify, ops, os_reinstall, phase6]
+
+- name: 断言云厂商监控目录均已清除
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists
+    fail_msg: "检测到云厂商监控目录遗留: {{ item.item }}，系统未彻底纯净化！"
+    quiet: true
+  loop: "{{ os_reinstall_vendor_dirs.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  tags: [verify, ops, os_reinstall, phase6]
+
+- name: 检查运行进程中是否存在云监控组件 (pgrep 进程名探测)
+  ansible.builtin.command:
+    argv: ["pgrep", "-l", "-f", "(tat_agent|barad|sgagent|yunjing)"]
+  register: os_reinstall_proc_check
+  failed_when: os_reinstall_proc_check.rc not in [0, 1]
+  changed_when: false
+  tags: [verify, ops, os_reinstall, phase6]
+
+- name: 断言无云监控相关进程运行 (pgrep 返回码应为 1)
+  ansible.builtin.assert:
+    that:
+      - os_reinstall_proc_check.rc == 1
+    fail_msg: >-
+      检测到云厂商监控进程存活 (匹配到 {{ os_reinstall_proc_check.stdout_lines | length }} 个进程):
+      {{ os_reinstall_proc_check.stdout_lines }}
+    quiet: true
+  tags: [verify, ops, os_reinstall, phase6]
+
+- name: 检查已安装 dpkg 包中是否存在云厂商监控包
+  ansible.builtin.command:
+    argv: ["dpkg-query", "-W", "-f=${Package}\n", "tat_agent*", "barad*", "sgagent*", "qcloud*", "yunjing*"]
+  register: os_reinstall_dpkg_check
+  failed_when: os_reinstall_dpkg_check.rc not in [0, 1]
+  changed_when: false
+  tags: [verify, ops, os_reinstall, phase6]
+
+- name: 断言无云厂商监控 dpkg 包安装 (dpkg-query 返回码应为 1)
+  ansible.builtin.assert:
+    that:
+      - os_reinstall_dpkg_check.rc == 1
+    fail_msg: >-
+      检测到云厂商监控 dpkg 包遗留:
+      {{ os_reinstall_dpkg_check.stdout_lines }}
+    quiet: true
+  tags: [verify, ops, os_reinstall, phase6]
+
+- name: 检查 systemd 是否存在云监控残留 unit 文件
+  ansible.builtin.command:
+    argv: ["systemctl", "list-unit-files", "--no-legend", "tat*", "barad*", "sgagent*", "qcloud*", "yunjing*"]
+  register: os_reinstall_unit_check
+  failed_when: os_reinstall_unit_check.rc not in [0, 1]
+  changed_when: false
+  tags: [verify, ops, os_reinstall, phase6]
+
+- name: 断言无云监控相关 systemd unit 文件 (list-unit-files 无匹配)
+  ansible.builtin.assert:
+    that:
+      - (os_reinstall_unit_check.stdout | trim) == ""
+    fail_msg: >-
+      检测到云厂商监控 systemd unit 文件存活:
+      {{ os_reinstall_unit_check.stdout_lines }}
+    quiet: true
+  tags: [verify, ops, os_reinstall, phase6]
+
+- name: 收集实际网络接口可观测状态
+  ansible.builtin.command:
+    argv: ["ip", "-brief", "addr", "show"]
+  register: os_reinstall_net_check
+  changed_when: false
+  tags: [verify, ops, os_reinstall, phase6]
+
+- name: 记录网络接口状态已收集
+  ansible.builtin.debug:
+    msg: "目标主机网络接口信息已收集 (已识别接口: {{ os_reinstall_net_check.stdout_lines | map('regex_replace', '^([^ ]+).*', '\\1') | list }})"
+  tags: [verify, ops, os_reinstall, phase6]

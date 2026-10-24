@@ -1,0 +1,8 @@
+---
+- name: 声明重装角色不支持自动回滚 (Fail loud on rollback)
+  ansible.builtin.fail:
+    msg: >-
+      [MANUAL-DESTRUCTIVE] vps.ops.os_reinstall 是不可逆的物理全盘抹除与系统重装角色。
+      本角色不支持自动化 rollback。若重装或引导失败，请登录服务商外部管理控制台（VNC/救援系统）
+      或通过 trans.sh / 官方镜像重置救砖。
+  tags: [rollback, ops, os_reinstall, phase6]

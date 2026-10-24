@@ -1,0 +1,62 @@
+---
+- name: 未启用重装角色时跳过 (Skip when not enabled)
+  ansible.builtin.debug:
+    msg: "vps.ops.os_reinstall is disabled by default. Skipping execution safely."
+  when: not (auroraops_roles['ops']['os_reinstall'] | default(false) | bool)
+  tags: [deploy, ops, os_reinstall, phase6]
+
+- name: 纯净重装执行保护与任务块 (Reinstall execution block)
+  when: auroraops_roles['ops']['os_reinstall'] | default(false) | bool
+  block:
+    - name: 拒绝在 check 模式下执行破坏性重装 (Fail if check mode)
+      ansible.builtin.fail:
+        msg: "vps.ops.os_reinstall is a destructive operational role and cannot be run in check mode."
+      when: ansible_check_mode | bool
+
+    - name: 严格限制单主机执行范围 (Guard single host scope)
+      ansible.builtin.assert:
+        that:
+          - (ansible_play_hosts_all | length) == 1
+        fail_msg: >-
+          vps.ops.os_reinstall 严禁并发或批量执行。ansible_play_hosts_all 必须且仅能包含 1 台主机，当前为 {{ ansible_play_hosts_all | length }} 台 ({{ ansible_play_hosts_all | join(', ') }})。
+        quiet: true
+
+    - name: 检查二次确认开关 (Assert explicit confirmation)
+      ansible.builtin.assert:
+        that:
+          - os_reinstall_confirm | bool
+        fail_msg: >-
+          vps.ops.os_reinstall 具备全盘抹除性。必须显式设置 os_reinstall_confirm: true 才能执行。
+        quiet: true
+
+    - name: 校验 SSH 公钥非空且格式合法 (Validate SSH public key)
+      ansible.builtin.assert:
+        that:
+          - os_reinstall_ssh_pubkey is defined
+          - os_reinstall_ssh_pubkey | trim | length > 0
+          - >-
+            os_reinstall_ssh_pubkey is regex('^(ssh-(ed25519|rsa|dss)|ecdsa-sha2-[a-z0-9-]+|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-[a-z0-9-]+@openssh\.com)\s+[A-Za-z0-9+/=]+(\s+.*)?$')
+        fail_msg: >-
+          os_reinstall_ssh_pubkey 必须是非空且合法的 SSH 公钥（例如 ssh-ed25519 AAAA...）。
+        quiet: true
+
+    - name: 校验目标 Debian 版本与基础参数 (Validate parameters)
+      ansible.builtin.assert:
+        that:
+          - os_reinstall_debian_version in ['12', '13']
+          - os_reinstall_username | trim | length > 0
+          - os_reinstall_ssh_port | int > 0
+          - os_reinstall_ssh_port | int <= 65535
+        fail_msg: "Debian 版本必须为 12 或 13，端口范围 1-65535，用户名非空。"
+        quiet: true
+
+    - name: 导入下载任务 (Download reinstall script)
+      ansible.builtin.include_tasks: download.yml
+
+    - name: 导入重装配置任务 (Prepare Debian install)
+      ansible.builtin.include_tasks: prepare.yml
+
+    - name: 导入重启任务 (Reboot target host)
+      ansible.builtin.include_tasks: reboot.yml
+      when: os_reinstall_trigger_reboot | bool
+  tags: [deploy, ops, os_reinstall, phase6]

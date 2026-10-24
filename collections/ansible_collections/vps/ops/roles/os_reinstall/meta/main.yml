@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  author: AuroraOps
+  description: >-
+    Irreversible clean OS reinstallation role using bin456789/reinstall.sh.
+    Performs full-disk reinstall to clean official Debian to purge cloud vendor
+    monitoring agents. Manual-destructive: no automatic rollback.
+  license: MIT
+  min_ansible_version: "2.14"
+dependencies: []

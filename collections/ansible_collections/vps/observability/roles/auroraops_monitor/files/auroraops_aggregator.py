@@ -340,18 +340,21 @@ class Aggregator:
 
         for ev in sorted(geo_events_collected, key=lambda x: parse_iso_utc(x.get("timestamp")) or datetime.min.replace(tzinfo=timezone.utc)):
             ev_dt = parse_iso_utc(ev.get("timestamp"))
+            if not ev_dt or ev_dt > end_utc:
+                # Exclude invalid timestamps or future events: do not update baseline, unique sets, or drift
+                continue
+
             ip = ev.get("current_ip")
             asn = ev.get("asn")
             region = ev.get("region")
 
-            if ev_dt and ev_dt < start_utc:
+            if ev_dt < start_utc:
                 # Event is prior to window: establish baseline state only, don't count drift!
                 if ip:
                     last_ip = ip
                 if region:
                     last_region = region
                 continue
-
             if ip:
                 unique_ips.add(ip)
                 if last_ip and ip != last_ip:
@@ -458,12 +461,12 @@ class Aggregator:
         password = self.env.get("CF_ADMIN_PASSWORD", os.environ.get("CF_ADMIN_PASSWORD", ""))
 
         if not password:
-            return {"status": "pending_credentials", "error": "CF_ADMIN_PASSWORD not set"}
+            return {"status": "pending_credentials", "error": "CF_ADMIN_PASSWORD not set", "details": {}, "servers": []}
 
         try:
             token = self._get_cf_jwt(worker_url, password)
         except Exception as e:
-            return {"status": "auth_failed", "error": str(e)}
+            return {"status": "auth_failed", "error": str(e), "details": {}, "servers": []}
 
         servers_url = f"{worker_url.rstrip('/')}/api/servers"
         sreq = urllib.request.Request(
@@ -475,8 +478,7 @@ class Aggregator:
             with urllib.request.urlopen(sreq, timeout=15) as resp:
                 servers_data = json.loads(resp.read().decode("utf-8"))
         except Exception as e:
-            return {"status": "fetch_servers_failed", "error": str(e)}
-
+            return {"status": "fetch_servers_failed", "error": str(e), "details": {}, "servers": []}
         servers = servers_data.get("servers", [])
         collected = {}
 
@@ -535,19 +537,22 @@ class Aggregator:
                 "total_archived": len(merged_points),
             }
 
-        return {"status": "ok", "collected_servers": len(servers), "details": collected}
+        return {"status": "ok", "collected_servers": len(servers), "details": collected, "servers": servers}
 
     def aggregate_cf_history_window(self, start_utc: datetime, end_utc: datetime) -> dict[str, Any]:
         """Aggregate CF server metrics strictly across the cumulative archive within the window."""
         # Run a collection tick to pull the freshest 24h
         tick_res = self.collect_cf_history_tick()
+        tick_status = tick_res.get("status", "unknown")
+        tick_error = tick_res.get("error")
         collected_details = tick_res.get("details", {})
 
         worker_url = self.env.get("CF_WORKER_URL", os.environ.get("CF_WORKER_URL", "https://cf-server-monitor.suainam.workers.dev"))
         password = self.env.get("CF_ADMIN_PASSWORD", os.environ.get("CF_ADMIN_PASSWORD", ""))
 
-        servers = []
-        if password:
+        servers = tick_res.get("servers", [])
+        servers_get_error = None
+        if not servers and password:
             try:
                 token = self._get_cf_jwt(worker_url, password)
                 sreq = urllib.request.Request(
@@ -557,13 +562,26 @@ class Aggregator:
                 )
                 with urllib.request.urlopen(sreq, timeout=15) as resp:
                     servers = json.loads(resp.read().decode("utf-8")).get("servers", [])
-            except Exception:
-                pass
+            except Exception as e:
+                servers_get_error = str(e)
+
+        # Discover all server IDs present in local cf_history_dir so old archive is never lost
+        local_server_ids = set()
+        if self.cf_history_dir.exists():
+            for f in self.cf_history_dir.glob("*.json"):
+                if not f.name.startswith("."):
+                    local_server_ids.add(f.stem)
+
+        servers_by_id = {s["id"]: s for s in servers if isinstance(s, dict) and "id" in s}
+        for sid in sorted(local_server_ids):
+            if sid not in servers_by_id:
+                servers_by_id[sid] = {"id": sid, "name": sid, "last_updated": None}
+        all_servers = list(servers_by_id.values())
 
         now = datetime.now(timezone.utc)
         server_summaries: dict[str, Any] = {}
 
-        for srv in servers:
+        for srv in all_servers:
             sid = srv.get("id")
             sname = srv.get("name", sid)
             if not sid:
@@ -623,8 +641,13 @@ class Aggregator:
             elif cnt == 1:
                 cov = "partial"
 
-            srv_detail = collected_details.get(sname, {})
-            fetch_status = srv_detail.get("fetch_status", "ok" if is_online else "unprobed")
+            srv_detail = collected_details.get(sname) or collected_details.get(sid, {})
+            if "fetch_status" in srv_detail:
+                fetch_status = srv_detail["fetch_status"]
+            elif tick_status != "ok":
+                fetch_status = f"{tick_status}: {tick_error}" if tick_error else tick_status
+            else:
+                fetch_status = "unknown"
             if cnt > 0:
                 cpu_vals = [float(p["cpu"]) for p in window_points if "cpu" in p and p["cpu"] is not None]
                 ram_vals = []
@@ -676,12 +699,27 @@ class Aggregator:
                 "ping_ct_p95_ms": ping_ct_p95,
             }
 
+        overall_status = "ok"
+        overall_error = None
+        if tick_status != "ok":
+            overall_status = tick_status
+            overall_error = tick_error
+        elif servers_get_error:
+            overall_status = "fetch_servers_failed"
+            overall_error = servers_get_error
+        else:
+            failed_srvs = [s for s, st in server_summaries.items() if st.get("fetch_status") != "ok"]
+            if failed_srvs:
+                overall_status = "degraded"
+                overall_error = f"Fetch failed for {len(failed_srvs)} servers: {failed_srvs}"
+
         return {
-            "status": "ok",
-            "servers_count": len(servers),
+            "status": overall_status,
+            "error": overall_error,
+            "tick_status": tick_status,
+            "servers_count": len(all_servers),
             "servers": server_summaries,
         }
-
     # -------------------------------------------------------------------------
     # 3. TypeSafe Jev Decide-Only Semantic Evaluation
     # -------------------------------------------------------------------------
@@ -721,8 +759,11 @@ class Aggregator:
         high_loss_targets = [tgt for tgt, tinfo in reach.items() if tinfo.get("loss_pct", 0) > 20.0]
         unreachable_targets = [tgt for tgt, tinfo in reach.items() if tinfo.get("samples", 0) > 0 and tinfo.get("loss_pct") == 100.0]
 
+        cf_status = cf.get("status", "unknown")
+        cf_error = cf.get("error")
         cf_servers = cf.get("servers", {})
         offline_servers = [sname for sname, sinfo in cf_servers.items() if not sinfo.get("online")]
+        fetch_failed_servers = [sname for sname, sinfo in cf_servers.items() if sinfo.get("fetch_status") != "ok"]
         cf_loss_servers = [sname for sname, sinfo in cf_servers.items() if (sinfo.get("loss_ct_avg") or 0) > 5.0]
 
         narration = (
@@ -736,8 +777,8 @@ class Aggregator:
             f"memory_avg={qqg.get('memory', {}).get('used_pct_avg')}%, "
             f"geo_drift_events={qqg.get('geo_audit', {}).get('drift_events_count')}, "
             f"unique_regions={qqg.get('geo_audit', {}).get('unique_regions')}.\n"
-            f"- Cloudflare Monitored Nodes: total_servers={cf.get('servers_count', 0)}, "
-            f"offline_servers={offline_servers}, high_loss_servers={cf_loss_servers}.\n"
+            f"- Cloudflare Monitored Nodes: status={cf_status}, error={cf_error}, total_servers={cf.get('servers_count', 0)}, "
+            f"fetch_failed_servers={fetch_failed_servers}, offline_servers={offline_servers}, high_loss_servers={cf_loss_servers}.\n"
         )
 
         payload = {
@@ -941,27 +982,31 @@ class Aggregator:
             "## 4. Cloudflare Server Monitor 历史时序与存活",
             "",
         ])
-        if cf_facts.get("status") == "ok":
+        if cf_facts.get("status") != "ok":
+            md_lines.append(f"> ⚠️ **采集状态异常**：`{cf_facts.get('status')}` (错误: `{cf_facts.get('error') or 'None'}`，数据基于本地归档/降级)")
+            md_lines.append("")
+
+        if cf_facts.get("servers"):
             md_lines.extend([
-                f"- **纳管服务器总数**：`{cf_facts.get('servers_count')}` 台",
+                f"- **纳管服务器总数**：`{cf_facts.get('servers_count')}` 台 (采集状态: `{cf_facts.get('status')}`)",
                 "",
-                "| 服务器名称 | 在线状态 | 覆盖度 | 窗口采样点 | CPU 均值 | 内存均值 | 电信丢包 | 电信时延 p50 |",
-                "|---|---|---|---|---|---|---|---|",
+                "| 服务器名称 | 在线状态 | 抓取状态 | 覆盖度 | 窗口采样点 | CPU 均值 | 内存均值 | 电信丢包 | 电信时延 p50 |",
+                "|---|---|---|---|---|---|---|---|---|",
             ])
             for sname, sstat in cf_facts.get("servers", {}).items():
                 on_label = "🟢 在线" if sstat.get("online") else "🔴 离线"
+                f_stat = sstat.get("fetch_status", "unknown")
                 cov_label = sstat.get("coverage", "none")
                 cpu_disp = f"{sstat.get('cpu_avg_pct')}%" if sstat.get("cpu_avg_pct") is not None else "N/A"
                 ram_disp = f"{sstat.get('ram_avg_pct')}%" if sstat.get("ram_avg_pct") is not None else "N/A"
                 loss_disp = f"{sstat.get('loss_ct_avg')}%" if sstat.get('loss_ct_avg') is not None else "N/A"
                 ping_disp = f"{sstat.get('ping_ct_p50_ms')} ms" if sstat.get('ping_ct_p50_ms') is not None else "N/A"
                 md_lines.append(
-                    f"| `{sname}` | {on_label} | `{cov_label}` | {sstat.get('window_points_count')} | {cpu_disp} | {ram_disp} | "
+                    f"| `{sname}` | {on_label} | `{f_stat}` | `{cov_label}` | {sstat.get('window_points_count')} | {cpu_disp} | {ram_disp} | "
                     f"{loss_disp} | {ping_disp} |"
                 )
         else:
             md_lines.append(f"*CF 历史拉取受限或未完成: {cf_facts.get('error', cf_facts.get('status'))}*")
-
         md_report_str = "\n".join(md_lines) + "\n"
         self.assert_sanitized(md_report_str)
 

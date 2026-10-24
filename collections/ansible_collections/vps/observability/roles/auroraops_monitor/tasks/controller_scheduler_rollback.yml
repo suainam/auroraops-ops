@@ -29,7 +29,7 @@
     plist_path = os.path.join(home, "Library/LaunchAgents", f"{timer_name}.plist")
     bin_dir = os.path.join(home, ".auroraops/bin")
     timer_script = sys.argv[7]
-    scripts = [timer_script, "instabox_scheduler_tick.py"]
+    scripts = [timer_script, "instabox_scheduler_tick.py"] if timer_script == "instabox_scheduler_tick.sh" else [timer_script]
     if not os.path.exists(baseline_file):
         if os.path.lexists(plist_path):
             os.remove(plist_path)

@@ -29,17 +29,16 @@
 
     plist_path = os.path.join(home, "Library/LaunchAgents", f"{timer_name}.plist")
     timer_script = sys.argv[6]
-    scripts = [timer_script, "instabox_scheduler_tick.py"]
+    scripts = [timer_script, "instabox_scheduler_tick.py"] if timer_script == "instabox_scheduler_tick.sh" else [timer_script]
     bin_dir = os.path.join(home, ".auroraops/bin")
 
-    # Check if instabox-monitoring-before.json says it was absent for com.auroraops.instabox-scheduler
-    # To honor "当前已部署情况下不得把此前初始baseline捏造成新数据；首次历史状态按既有artifact，对未来fixture用真实before"
-    before_artifact = "/Users/suai/work/projects/auroraops-control/.worktrees/instabox-sandbox/artifacts/instabox-monitoring-before.json"
+    artifact_host = "cc15" if timer_name == "com.auroraops.cc15-spool-pusher" else ("qqg1299" if timer_name == "com.auroraops.qqg1299-spool-puller" else "instabox")
+    before_artifact = f"/Users/suai/work/projects/auroraops-control/.worktrees/instabox-sandbox/artifacts/{artifact_host}-monitoring-before.json"
     if not os.path.exists(before_artifact):
-        before_artifact = "/Users/suai/work/projects/auroraops-control/artifacts/instabox-monitoring-before.json"
+        before_artifact = f"/Users/suai/work/projects/auroraops-control/artifacts/{artifact_host}-monitoring-before.json"
 
     legacy_artifact_absent = False
-    if timer_name == "com.auroraops.instabox-scheduler" and os.path.exists(before_artifact):
+    if os.path.exists(before_artifact):
         try:
             with open(before_artifact) as bf:
                 bdata = json.load(bf)
@@ -48,7 +47,6 @@
                     legacy_artifact_absent = True
         except Exception:
             pass
-
     plist_exists = False
     plist_loaded = False
     plist_meta = {}
@@ -123,6 +121,7 @@
     - instabox_scheduler_tick.sh
     - instabox_scheduler_tick.py
     - qqg1299_spool_puller.sh
+    - cc15_spool_pusher.py
   tags: [deploy, observability, auroraops_monitor]
 
 - name: 调用通用 managed_timer 管理控制端 LaunchAgent (Darwin Controller)
@@ -132,9 +131,7 @@
     timer_name: "{{ controller_timer_name }}"
     timer_description: "{{ controller_timer_description }}"
     timer_exec_start: "{{ lookup('env', 'HOME') }}/.auroraops/bin/{{ controller_timer_script }}"
-    timer_exec_args:
-      - "/bin/bash"
-      - "{{ lookup('env', 'HOME') }}/.auroraops/bin/{{ controller_timer_script }}"
+    timer_exec_args: "{{ ['/usr/bin/python3', lookup('env', 'HOME') ~ '/.auroraops/bin/cc15_spool_pusher.py', '--ssh-target', inventory_hostname] if auroraops_monitor_mode == 'aggregator' else ['/bin/bash', lookup('env', 'HOME') ~ '/.auroraops/bin/' ~ controller_timer_script] }}"
     timer_interval_seconds: "{{ controller_timer_interval }}"
     timer_log_dir: "{{ lookup('env', 'HOME') }}/Library/Logs/AuroraOps"
     timer_init_system: "darwin"

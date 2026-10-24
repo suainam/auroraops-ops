@@ -24,7 +24,7 @@
   ansible.builtin.shell: |
     set -euo pipefail
     python3 -c '
-    import os, sys, stat, json, shutil, pwd, grp
+    import os, sys, stat, json, shutil, pwd, grp, subprocess
 
     monitor_dir = sys.argv[1]
     spool_dir = sys.argv[2]
@@ -32,6 +32,8 @@
     backup_dir = sys.argv[4]
     max_spool_bytes = int(sys.argv[5])
 
+    if os.path.exists(fact_path):
+        sys.exit(0)
     def get_meta(path):
         if not os.path.lexists(path):
             return {"exists": False, "pre_exists": False}
@@ -65,6 +67,8 @@
         "/etc/systemd/system/auroraops_weekly_report.timer",
         "/etc/systemd/system/auroraops_cf_collector.service",
         "/etc/systemd/system/auroraops_cf_collector.timer",
+        "/etc/systemd/system/auroraops-monitor.service",
+        "/etc/systemd/system/auroraops-monitor.timer",
     ]
     os.makedirs(backup_dir, exist_ok=True)
     os.chmod(backup_dir, 0o700)
@@ -87,7 +91,22 @@
         sys_meta[sf] = meta
         if meta["exists"]:
             shutil.copy2(sf, os.path.join(backup_dir, f"sys_{os.path.basename(sf)}"))
-
+            if sf.endswith((".service", ".timer")):
+                uname = os.path.basename(sf)
+                try:
+                    res_en = subprocess.run(["systemctl", "is-enabled", uname], capture_output=True, text=True)
+                    meta["enabled"] = res_en.stdout.strip() in ("enabled", "linked", "linked-runtime", "static")
+                except Exception:
+                    meta["enabled"] = False
+                try:
+                    res_act = subprocess.run(["systemctl", "is-active", uname], capture_output=True, text=True)
+                    meta["active"] = res_act.stdout.strip() == "active"
+                except Exception:
+                    meta["active"] = False
+        else:
+            if sf.endswith((".service", ".timer")):
+                meta["enabled"] = False
+                meta["active"] = False
     user_name = sys.argv[6]
     group_name = sys.argv[7]
     try:
@@ -178,6 +197,180 @@
   when: auroraops_monitor_mode == 'aggregator'
   tags: [deploy, observability, auroraops_monitor]
 
+- name: 恢复并合并未 ACK 归档数据 (确保回滚后不丢时序与 Spool，防历史断档)
+  become: true
+  args:
+    executable: /bin/bash
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 -c '
+    import os, sys, json, shutil, fcntl, pwd, grp
+
+    archive_dir = sys.argv[1]
+    monitor_dir = sys.argv[2]
+    lock_file = sys.argv[3]
+    user = sys.argv[4]
+    group = sys.argv[5]
+
+    if not os.path.exists(archive_dir):
+        sys.exit(0)
+
+    os.makedirs(os.path.dirname(lock_file), exist_ok=True)
+    with open(lock_file, "a") as lf:
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+        try:
+            # 1. Restore/merge cf_history
+            arch_cf = os.path.join(archive_dir, "cf_history")
+            target_cf = os.path.join(monitor_dir, "cf_history")
+            if os.path.isdir(arch_cf):
+                os.makedirs(target_cf, exist_ok=True)
+                for fname in os.listdir(arch_cf):
+                    if not fname.endswith(".json") or fname.startswith("."):
+                        continue
+                    arch_file = os.path.join(arch_cf, fname)
+                    target_file = os.path.join(target_cf, fname)
+                    arch_points = []
+                    try:
+                        with open(arch_file, "r", encoding="utf-8") as af:
+                            d = json.load(af)
+                            if isinstance(d, list):
+                                arch_points = d
+                    except Exception:
+                        pass
+
+                    target_points = []
+                    if os.path.exists(target_file):
+                        try:
+                            with open(target_file, "r", encoding="utf-8") as tf:
+                                d = json.load(tf)
+                                if isinstance(d, list):
+                                    target_points = d
+                        except Exception:
+                            pass
+
+                    merged_map = {}
+                    for p in arch_points:
+                        ts = p.get("timestamp")
+                        if ts:
+                            merged_map[ts] = p
+                    for p in target_points:
+                        ts = p.get("timestamp")
+                        if ts:
+                            merged_map[ts] = p
+
+                    merged_list = sorted(merged_map.values(), key=lambda x: str(x.get("timestamp") or ""))
+                    tmp_tf = target_file + f".tmp.{os.getpid()}"
+                    with open(tmp_tf, "w", encoding="utf-8") as tf:
+                        json.dump(merged_list, tf, indent=1)
+                        tf.flush()
+                        os.fsync(tf.fileno())
+                    os.replace(tmp_tf, target_file)
+                    dfd = os.open(target_cf, os.O_RDONLY)
+                    os.fsync(dfd)
+                    os.close(dfd)
+
+            # 2. Restore/merge spool_inbound
+            arch_ib = os.path.join(archive_dir, "spool_inbound")
+            target_ib = os.path.join(monitor_dir, "spool_inbound")
+            if os.path.isdir(arch_ib):
+                for sub in os.listdir(arch_ib):
+                    src_sub = os.path.join(arch_ib, sub)
+                    dst_sub = os.path.join(target_ib, sub)
+                    if os.path.isdir(src_sub):
+                        os.makedirs(dst_sub, exist_ok=True)
+                        for f in os.listdir(src_sub):
+                            if f.startswith("."):
+                                continue
+                            sf = os.path.join(src_sub, f)
+                            df = os.path.join(dst_sub, f)
+                            if not os.path.exists(df):
+                                shutil.copy2(sf, df)
+                            else:
+                                seen_keys = set()
+                                lines = []
+                                with open(df, "r", encoding="utf-8") as in_f:
+                                    for line in in_f:
+                                        l = line.strip()
+                                        if l:
+                                            try:
+                                                rec = json.loads(l)
+                                                k = rec.get("run_id") or rec.get("timestamp_utc") or l
+                                                seen_keys.add(k)
+                                                lines.append(l)
+                                            except Exception:
+                                                lines.append(l)
+                                with open(sf, "r", encoding="utf-8") as in_f:
+                                    for line in in_f:
+                                        l = line.strip()
+                                        if l:
+                                            try:
+                                                rec = json.loads(l)
+                                                k = rec.get("run_id") or rec.get("timestamp_utc") or l
+                                                if k not in seen_keys:
+                                                    seen_keys.add(k)
+                                                    lines.append(l)
+                                            except Exception:
+                                                lines.append(l)
+                                tmp_df = df + f".tmp.{os.getpid()}"
+                                with open(tmp_df, "w", encoding="utf-8") as out_f:
+                                    for l in lines:
+                                        out_f.write(l + "\n")
+                                    out_f.flush()
+                                    os.fsync(out_f.fileno())
+                                os.replace(tmp_df, df)
+
+            # 3. Restore/merge spool
+            arch_spool = os.path.join(archive_dir, "spool")
+            target_spool = os.path.join(monitor_dir, "spool")
+            if os.path.isdir(arch_spool):
+                os.makedirs(target_spool, exist_ok=True)
+                for f in os.listdir(arch_spool):
+                    if not f.startswith("."):
+                        sf = os.path.join(arch_spool, f)
+                        df = os.path.join(target_spool, f)
+                        if not os.path.exists(df):
+                            shutil.copy2(sf, df)
+
+            # 4. Restore preserved active spool
+            for f in os.listdir(archive_dir):
+                if f.startswith("spool-preserved-") and f.endswith(".jsonl"):
+                    sf = os.path.join(archive_dir, f)
+                    target_spool_dir = os.path.join(monitor_dir, "spool")
+                    os.makedirs(target_spool_dir, exist_ok=True)
+                    df = os.path.join(target_spool_dir, f)
+                    if not os.path.exists(df):
+                        shutil.copy2(sf, df)
+
+            # 5. Restore reports
+            arch_rep = os.path.join(archive_dir, "reports")
+            target_rep = os.path.join(monitor_dir, "reports")
+            if os.path.isdir(arch_rep):
+                os.makedirs(target_rep, exist_ok=True)
+                for f in os.listdir(arch_rep):
+                    if not f.startswith("."):
+                        sf = os.path.join(arch_rep, f)
+                        df = os.path.join(target_rep, f)
+                        if not os.path.exists(df):
+                            shutil.copy2(sf, df)
+
+            # Clean archive_dir now that recovery is complete and confirmed
+            shutil.rmtree(archive_dir)
+
+            # Ensure correct ownership
+            try:
+                uid = pwd.getpwnam(user).pw_uid
+                gid = grp.getgrnam(group).gr_gid
+                for root, dirs, files in os.walk(monitor_dir):
+                    for d in dirs:
+                        os.chown(os.path.join(root, d), uid, gid)
+                    for f in files:
+                        os.chown(os.path.join(root, f), uid, gid)
+            except Exception:
+                pass
+        finally:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+    ' "{{ auroraops_monitor_unacked_archive_dir }}" "{{ auroraops_monitor_dir }}" "{{ auroraops_monitor_lock_file }}" "{{ auroraops_monitor_user }}" "{{ auroraops_monitor_group }}"
+  tags: [deploy, observability, auroraops_monitor]
 - name: 部署 auroraops_aggregator.py 汇总与周报生成器 (Aggregator)
   become: true
   ansible.builtin.copy:
@@ -506,7 +699,6 @@
   ansible.builtin.include_tasks: controller_scheduler_apply.yml
   when:
     - not ansible_check_mode
-    - auroraops_monitor_mode != 'aggregator'
   tags: [deploy, observability, auroraops_monitor]
 
 
@@ -535,36 +727,6 @@
     - not (auroraops_monitor_preflight_dir_stat.stat.exists | default(false))
   tags: [deploy, observability, auroraops_monitor]
 
-- name: 部署控制端 cc15_spool_pusher.py 脚本 (Darwin Controller)
-  delegate_to: localhost
-  ansible.builtin.copy:
-    src: cc15_spool_pusher.py
-    dest: "{{ lookup('env', 'HOME') }}/.auroraops/bin/cc15_spool_pusher.py"
-    mode: "0755"
-  when: auroraops_monitor_mode == 'aggregator'
-  tags: [deploy, observability, auroraops_monitor]
-
-- name: 纳入控制端 cc15-spool-pusher LaunchAgent 定时调度 (Darwin Controller)
-  ansible.builtin.include_tasks:
-    file: "{{ role_path }}/../../../common/tasks/managed_timer.yml"
-  vars:
-    timer_name: "com.auroraops.cc15-spool-pusher"
-    timer_description: "AuroraOps cc15 Spool Pusher"
-    timer_exec_start: "{{ lookup('env', 'HOME') }}/.auroraops/bin/cc15_spool_pusher.py"
-    timer_exec_args:
-      - "/usr/bin/python3"
-      - "{{ lookup('env', 'HOME') }}/.auroraops/bin/cc15_spool_pusher.py"
-      - "--ssh-target"
-      - "{{ inventory_hostname }}"
-    timer_interval_seconds: 300
-    timer_log_dir: "{{ lookup('env', 'HOME') }}/Library/Logs/AuroraOps"
-    timer_init_system: "darwin"
-    timer_enabled: true
-    timer_state: started
-  when:
-    - auroraops_monitor_mode == 'aggregator'
-    - not ansible_check_mode
-  tags: [deploy, observability, auroraops_monitor]
 
 - name: 立即触发首轮控制端 Spool 同步 (Aggregator)
   delegate_to: localhost

@@ -13,7 +13,7 @@
     plist_path = os.path.join(home, "Library/LaunchAgents", f"{timer_name}.plist")
     bin_dir = os.path.join(home, ".auroraops/bin")
     timer_script = sys.argv[4]
-    scripts = [timer_script, "instabox_scheduler_tick.py"]
+    scripts = [timer_script, "instabox_scheduler_tick.py"] if timer_script == "instabox_scheduler_tick.sh" else [timer_script]
     res = subprocess.run(["launchctl", "list"], capture_output=True, text=True, check=True)
     is_loaded = timer_name in res.stdout
 

@@ -29,7 +29,7 @@ auroraops_monitor_roll_interval_seconds: 900
 # Cloudflare Server Monitor configuration
 cf_probe_worker_url: "https://cf-server-monitor.suainam.workers.dev"
 # Controller timer configuration (Darwin Controller LaunchAgent)
-controller_timer_name: "{{ 'com.auroraops.instabox-scheduler' if auroraops_monitor_mode == 'outer_probe' else 'com.auroraops.qqg1299-spool-puller' }}"
-controller_timer_description: "{{ 'Instabox 4-Hour Outer Probe Scheduler' if auroraops_monitor_mode == 'outer_probe' else 'AuroraOps qqg1299 Bounded Spool Durable Puller' }}"
-controller_timer_script: "{{ 'instabox_scheduler_tick.sh' if auroraops_monitor_mode == 'outer_probe' else 'qqg1299_spool_puller.sh' }}"
+controller_timer_name: "{{ 'com.auroraops.instabox-scheduler' if auroraops_monitor_mode == 'outer_probe' else ('com.auroraops.cc15-spool-pusher' if auroraops_monitor_mode == 'aggregator' else 'com.auroraops.qqg1299-spool-puller') }}"
+controller_timer_description: "{{ 'Instabox 4-Hour Outer Probe Scheduler' if auroraops_monitor_mode == 'outer_probe' else ('AuroraOps cc15 Spool Pusher' if auroraops_monitor_mode == 'aggregator' else 'AuroraOps qqg1299 Bounded Spool Durable Puller') }}"
+controller_timer_script: "{{ 'instabox_scheduler_tick.sh' if auroraops_monitor_mode == 'outer_probe' else ('cc15_spool_pusher.py' if auroraops_monitor_mode == 'aggregator' else 'qqg1299_spool_puller.sh') }}"
 controller_timer_interval: "{{ 14400 if auroraops_monitor_mode == 'outer_probe' else 300 }}"

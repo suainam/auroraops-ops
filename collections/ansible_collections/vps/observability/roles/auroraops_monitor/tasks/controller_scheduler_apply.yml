@@ -21,7 +21,7 @@
 - name: 部署控制端调度脚本至稳定路径 (Darwin Controller)
   delegate_to: localhost
   ansible.builtin.copy:
-    src: "{{ role_path }}/../../../../../../../scripts/{{ item }}"
+    src: "{{ role_path }}/files/{{ item }}"
     dest: "{{ lookup('env', 'HOME') }}/.auroraops/bin/{{ item }}"
     mode: "0755"
   loop:

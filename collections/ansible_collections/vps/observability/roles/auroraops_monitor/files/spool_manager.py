@@ -28,14 +28,11 @@ SEALED_FILENAME_RE = re.compile(r"^spool-[0-9]{8}T[0-9]{6}Z(_[0-9]+)?\.jsonl$")
 
 
 def _fsync_dir(dir_path: Path) -> None:
+    dir_fd = os.open(str(dir_path), os.O_RDONLY)
     try:
-        dir_fd = os.open(str(dir_path), os.O_RDONLY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
-    except Exception:
-        pass
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
 
 
 def compute_sha256(file_path: Path) -> str:
@@ -171,10 +168,12 @@ class BoundedSpool:
                     })
         return result
 
-    def ack_file(self, filename: str, expected_sha256: str | None = None) -> dict:
+    def ack_file(self, filename: str, expected_sha256: str) -> dict:
         clean_name = os.path.basename(filename.strip())
         if not SEALED_FILENAME_RE.match(clean_name):
             raise ValueError(f"Invalid sealed filename format: '{clean_name}'")
+        if not expected_sha256 or not re.match(r"^[0-9a-fA-F]{64}$", str(expected_sha256)):
+            raise ValueError(f"expected_sha256 is required and must be a 64-character hex string, got: {expected_sha256}")
 
         target = self.spool_dir / clean_name
         lock_fd = self._acquire_lock()
@@ -185,7 +184,7 @@ class BoundedSpool:
                 raise ValueError("Target is not a regular file")
 
             actual_sha = compute_sha256(target)
-            if expected_sha256 and actual_sha.lower() != expected_sha256.lower():
+            if actual_sha.lower() != expected_sha256.lower():
                 raise ValueError(
                     f"Checksum mismatch for '{clean_name}': expected {expected_sha256}, got {actual_sha}. Deletion refused."
                 )
@@ -229,7 +228,7 @@ def main():
 
     ack_p = sub.add_parser("ack")
     ack_p.add_argument("filename", help="Sealed spool filename to ACK")
-    ack_p.add_argument("--sha256", dest="sha256", default=None, help="Expected SHA256 checksum")
+    ack_p.add_argument("--sha256", dest="sha256", required=True, help="Expected SHA256 checksum (required)")
 
     args = parser.parse_args()
     spool = BoundedSpool(base_dir=args.base_dir, max_bytes=args.max_bytes)

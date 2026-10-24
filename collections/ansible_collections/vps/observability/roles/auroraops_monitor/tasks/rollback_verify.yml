@@ -23,11 +23,12 @@
   register: auroraops_monitor_post_rb_dir
   tags: [rollback_verify, observability, auroraops_monitor]
 
-- name: 断言监控目录已不存在
+- name: 断言监控目录已不存在 (当且仅当部署前不存在)
   ansible.builtin.assert:
     that:
       - not auroraops_monitor_post_rb_dir.stat.exists
     fail_msg: "回滚失败: {{ auroraops_monitor_dir }} 仍然残留"
+  when: not (auroraops_monitor_pre_deploy_dir_exists | default(false) | bool)
   tags: [rollback_verify, observability, auroraops_monitor]
 
 - name: 验证宿主机保护资产完好无损 (/data/home 与预置目录)

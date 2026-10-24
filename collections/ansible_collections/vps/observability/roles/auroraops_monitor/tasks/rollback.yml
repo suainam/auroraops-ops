@@ -2,6 +2,10 @@
 # Stage 7: Rollback (Fault Simulation & Reversal)
 # Restores host to exact pre-deployment state while preserving un-ACKed data.
 
+- name: 停止并卸载控制端 LaunchAgent 定时调度器 (消除并发写窗口)
+  ansible.builtin.include_tasks: controller_scheduler_rollback.yml
+  tags: [rollback, observability, auroraops_monitor]
+
 - name: 检查 Baseline Fact 是否存在
   become: true
   ansible.builtin.stat:
@@ -47,24 +51,46 @@
   when: auroraops_monitor_rollback_fact_stat.stat.exists
   tags: [rollback, observability, auroraops_monitor]
 
-- name: 安全隔离并保全未 ACK 的 Spool 数据 (严禁丢失监控数据)
+- name: 持锁安全隔离并保全未 ACK 的 Spool 数据 (严禁丢数据，零吞错)
   become: true
   ansible.builtin.shell: |
-    set -e
+    set -euo pipefail
     archive_dir="/data/auroraops-monitor-unacked-archive"
     mkdir -p "$archive_dir"
     chmod 700 "$archive_dir"
     chown {{ auroraops_monitor_user }}:{{ auroraops_monitor_group }} "$archive_dir"
-    if [ -d "{{ auroraops_monitor_dir }}/spool" ]; then
-      cp -a {{ auroraops_monitor_dir }}/spool/* "$archive_dir/" 2>/dev/null || true
+
+    lock_file="{{ auroraops_monitor_dir }}/spool.lock"
+    touch "$lock_file"
+    exec 200<"$lock_file"
+    flock -x 200
+
+    if [ -d "{{ auroraops_monitor_dir }}/spool" ] && [ "$(ls -A {{ auroraops_monitor_dir }}/spool 2>/dev/null)" ]; then
+      cp -a {{ auroraops_monitor_dir }}/spool/* "$archive_dir/"
     fi
     if [ -f "{{ auroraops_monitor_dir }}/spool.jsonl" ] && [ -s "{{ auroraops_monitor_dir }}/spool.jsonl" ]; then
       cp -a {{ auroraops_monitor_dir }}/spool.jsonl "$archive_dir/spool-preserved-$(date +%s).jsonl"
     fi
+
+    # fsync target archive directory
+    python3 -c "import os; fd = os.open('$archive_dir', os.O_RDONLY); os.fsync(fd); os.close(fd)"
+    flock -u 200
   when:
     - auroraops_monitor_rollback_fact_stat.stat.exists
     - auroraops_monitor_unacked_check.stdout is defined
     - auroraops_monitor_unacked_check.stdout != 'clean'
+  tags: [rollback, observability, auroraops_monitor]
+
+- name: 恢复预置文件基线 (若存在原始备份)
+  become: true
+  ansible.builtin.shell: |
+    set -e
+    orig_dir="{{ auroraops_monitor_dir }}/.auroraops_orig"
+    if [ -d "$orig_dir" ]; then
+      cp -a "$orig_dir"/* "{{ auroraops_monitor_dir }}/"
+      rm -rf "$orig_dir"
+    fi
+  when: auroraops_monitor_rollback_fact_stat.stat.exists
   tags: [rollback, observability, auroraops_monitor]
 
 - name: 清理角色部署的脚本文件
@@ -96,8 +122,4 @@
     path: "{{ auroraops_monitor_fact_path }}"
     state: absent
   when: auroraops_monitor_rollback_fact_stat.stat.exists
-  tags: [rollback, observability, auroraops_monitor]
-
-- name: 回滚控制端 LaunchAgent 调度器 (Darwin Controller)
-  ansible.builtin.include_tasks: controller_scheduler_rollback.yml
   tags: [rollback, observability, auroraops_monitor]

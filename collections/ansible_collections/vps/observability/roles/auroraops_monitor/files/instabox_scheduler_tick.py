@@ -74,7 +74,7 @@ class SchedulerTick:
         timeout = self._remaining_timeout(timeout_cap)
         full_cmd = ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={max(1, int(min(timeout, 15)))}"]
         if self.ssh_identity and self.ssh_identity.exists():
-            full_cmd += ["-i", str(self.ssh_identity)]
+            full_cmd += ["-o", "ControlPath=none", "-o", "IdentitiesOnly=yes", "-i", str(self.ssh_identity)]
         full_cmd += [self.ssh_target] + cmd_args
         t0 = time.monotonic()
         proc = subprocess.run(
@@ -149,7 +149,7 @@ class SchedulerTick:
                 f"ConnectTimeout={max(1, int(min(timeout, 15)))}",
             ]
             if self.ssh_identity and self.ssh_identity.exists():
-                scp_cmd += ["-i", str(self.ssh_identity)]
+                scp_cmd += ["-o", "ControlPath=none", "-o", "IdentitiesOnly=yes", "-i", str(self.ssh_identity)]
             scp_cmd += [
                 f"{self.ssh_target}:{remote_path}",
                 str(tmp_local),

@@ -4,15 +4,17 @@
 Guarantees:
 - Single writer lock (fcntl.flock).
 - Bounded spool capacity (50MB default).
-- Zero active file truncation (rename-based roll).
+- Zero active file truncation (rename-based roll with directory fsync).
 - Backpressure fail-closed when capacity exceeded with un-ACKed files (never delete un-ACKed records).
-- Secure ACK handshake to remove only verified sealed files.
+- Secure ACK handshake to remove only verified sealed files with SHA256 verification and directory fsync.
+- Strict filename validation rejecting path traversal and symlinks.
 """
 
 from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -22,7 +24,26 @@ from pathlib import Path
 
 DEFAULT_BASE_DIR = Path("/data/home/auroraops-monitor")
 DEFAULT_MAX_BYTES = 50 * 1024 * 1024  # 50MB
-SEALED_FILENAME_RE = re.compile(r"^spool-[0-9A-Za-z_\-]+(\.[a-zA-Z0-9]+)?\.jsonl$")
+SEALED_FILENAME_RE = re.compile(r"^spool-[0-9]{8}T[0-9]{6}Z(_[0-9]+)?\.jsonl$")
+
+
+def _fsync_dir(dir_path: Path) -> None:
+    try:
+        dir_fd = os.open(str(dir_path), os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except Exception:
+        pass
+
+
+def compute_sha256(file_path: Path) -> str:
+    h = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 class BoundedSpool:
@@ -56,7 +77,7 @@ class BoundedSpool:
             total += self.active_file.stat().st_size
         if self.spool_dir.exists():
             for f in self.spool_dir.iterdir():
-                if f.is_file():
+                if f.is_file() and not f.is_symlink():
                     total += f.stat().st_size
         return total
 
@@ -93,6 +114,8 @@ class BoundedSpool:
                 f.flush()
                 os.fsync(f.fileno())
 
+            _fsync_dir(self.base_dir)
+
             return {
                 "status": "appended",
                 "active_size": self.active_file.stat().st_size,
@@ -107,22 +130,26 @@ class BoundedSpool:
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         sealed_name = f"spool-{ts}.jsonl"
         target = self.spool_dir / sealed_name
-        # Collision avoidance
         counter = 1
         while target.exists():
             target = self.spool_dir / f"spool-{ts}_{counter}.jsonl"
             counter += 1
         self.active_file.rename(target)
+        _fsync_dir(self.spool_dir)
+        _fsync_dir(self.base_dir)
         return target
 
     def seal_active(self) -> dict:
         lock_fd = self._acquire_lock()
         try:
             sealed = self._roll_active_locked()
+            sha256 = compute_sha256(sealed) if sealed else None
             return {
                 "status": "sealed" if sealed else "empty",
                 "sealed_path": str(sealed) if sealed else None,
                 "sealed_filename": sealed.name if sealed else None,
+                "size_bytes": sealed.stat().st_size if sealed else 0,
+                "sha256": sha256,
             }
         finally:
             self._release_lock(lock_fd)
@@ -132,18 +159,20 @@ class BoundedSpool:
         result = []
         if self.spool_dir.exists():
             for f in sorted(self.spool_dir.iterdir()):
-                if f.is_file() and f.name.endswith(".jsonl"):
+                # Strict validation: regular file, non-symlink, matching pattern
+                if f.is_file() and not f.is_symlink() and SEALED_FILENAME_RE.match(f.name):
+                    size = f.stat().st_size
+                    sha = compute_sha256(f)
                     result.append({
                         "filename": f.name,
-                        "path": str(f),
-                        "size_bytes": f.stat().st_size,
+                        "size_bytes": size,
+                        "sha256": sha,
                         "mtime_utc": datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc).isoformat(),
                     })
         return result
 
-    def ack_file(self, filename: str) -> dict:
-        # Strictly validate filename against path traversal
-        clean_name = os.path.basename(filename)
+    def ack_file(self, filename: str, expected_sha256: str | None = None) -> dict:
+        clean_name = os.path.basename(filename.strip())
         if not SEALED_FILENAME_RE.match(clean_name):
             raise ValueError(f"Invalid sealed filename format: '{clean_name}'")
 
@@ -152,11 +181,19 @@ class BoundedSpool:
         try:
             if not target.exists():
                 return {"status": "not_found", "filename": clean_name}
-            if not target.is_file():
+            if target.is_symlink() or not target.is_file():
                 raise ValueError("Target is not a regular file")
-            # Delete only after explicit ACK
+
+            actual_sha = compute_sha256(target)
+            if expected_sha256 and actual_sha.lower() != expected_sha256.lower():
+                raise ValueError(
+                    f"Checksum mismatch for '{clean_name}': expected {expected_sha256}, got {actual_sha}. Deletion refused."
+                )
+
+            # Delete only after verified checksum and explicit ACK
             target.unlink()
-            return {"status": "acked_and_removed", "filename": clean_name}
+            _fsync_dir(self.spool_dir)
+            return {"status": "acked_and_removed", "filename": clean_name, "sha256": actual_sha}
         finally:
             self._release_lock(lock_fd)
 
@@ -192,6 +229,7 @@ def main():
 
     ack_p = sub.add_parser("ack")
     ack_p.add_argument("filename", help="Sealed spool filename to ACK")
+    ack_p.add_argument("--sha256", dest="sha256", default=None, help="Expected SHA256 checksum")
 
     args = parser.parse_args()
     spool = BoundedSpool(base_dir=args.base_dir, max_bytes=args.max_bytes)
@@ -209,7 +247,7 @@ def main():
         res = spool.list_unacked_files()
         print(json.dumps(res, indent=2))
     elif args.command == "ack":
-        res = spool.ack_file(args.filename)
+        res = spool.ack_file(args.filename, expected_sha256=args.sha256)
         print(json.dumps(res, indent=2))
     elif args.command == "status":
         res = spool.get_status()

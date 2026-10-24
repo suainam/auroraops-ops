@@ -1,6 +1,6 @@
 ---
 # Stage 7: Rollback (Fault Simulation & Reversal)
-# Restores host to exact pre-deployment state.
+# Restores host to exact pre-deployment state while preserving un-ACKed data.
 
 - name: 检查 Baseline Fact 是否存在
   become: true
@@ -31,7 +31,56 @@
     fail_msg: "拒绝回滚: auroraops_monitor_dir 路径不符合严格白名单，防止破坏上级或系统目录"
   tags: [rollback, observability, auroraops_monitor]
 
-- name: 清理 auroraops-monitor 部署目录 (当且仅当部署前不存在)
+- name: 检查是否存在未 ACK 的持久 Spool 数据
+  become: true
+  ansible.builtin.shell: |
+    set -e
+    if [ -d "{{ auroraops_monitor_dir }}/spool" ] && [ "$(ls -A {{ auroraops_monitor_dir }}/spool 2>/dev/null)" ]; then
+      echo "has_unacked_sealed"
+    elif [ -f "{{ auroraops_monitor_dir }}/spool.jsonl" ] && [ -s "{{ auroraops_monitor_dir }}/spool.jsonl" ]; then
+      echo "has_unacked_active"
+    else
+      echo "clean"
+    fi
+  register: auroraops_monitor_unacked_check
+  changed_when: false
+  when: auroraops_monitor_rollback_fact_stat.stat.exists
+  tags: [rollback, observability, auroraops_monitor]
+
+- name: 安全隔离并保全未 ACK 的 Spool 数据 (严禁丢失监控数据)
+  become: true
+  ansible.builtin.shell: |
+    set -e
+    archive_dir="/data/home/auroraops-monitor-unacked-archive"
+    mkdir -p "$archive_dir"
+    chmod 700 "$archive_dir"
+    chown {{ auroraops_monitor_user }}:{{ auroraops_monitor_group }} "$archive_dir"
+    if [ -d "{{ auroraops_monitor_dir }}/spool" ]; then
+      cp -a {{ auroraops_monitor_dir }}/spool/* "$archive_dir/" 2>/dev/null || true
+    fi
+    if [ -f "{{ auroraops_monitor_dir }}/spool.jsonl" ] && [ -s "{{ auroraops_monitor_dir }}/spool.jsonl" ]; then
+      cp -a {{ auroraops_monitor_dir }}/spool.jsonl "$archive_dir/spool-preserved-$(date +%s).jsonl"
+    fi
+  when:
+    - auroraops_monitor_rollback_fact_stat.stat.exists
+    - auroraops_monitor_unacked_check.stdout is defined
+    - auroraops_monitor_unacked_check.stdout != 'clean'
+  tags: [rollback, observability, auroraops_monitor]
+
+- name: 清理角色部署的脚本文件
+  become: true
+  ansible.builtin.file:
+    path: "{{ auroraops_monitor_dir }}/{{ item }}"
+    state: absent
+  loop:
+    - spool_manager.py
+    - auroraops_probe.py
+    - ipquality_geo_probe.py
+    - spool.lock
+  when: auroraops_monitor_rollback_fact_stat.stat.exists
+  tags: [rollback, observability, auroraops_monitor]
+
+- name: 移除 auroraops-monitor 部署目录 (当且仅当部署前不存在)
   become: true
   ansible.builtin.file:
     path: "{{ auroraops_monitor_dir }}"

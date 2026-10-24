@@ -78,9 +78,19 @@ def calculate_availability(valid: int, expected: int) -> float:
     return round((valid / expected) * 100.0, 2)
 
 
-def parse_iso_utc(ts_str: str) -> datetime | None:
-    if not ts_str:
+def parse_iso_utc(ts_val: Any) -> datetime | None:
+    if ts_val is None or ts_val == "":
         return None
+    if isinstance(ts_val, (int, float)):
+        if ts_val > 1e11:
+            return datetime.fromtimestamp(ts_val / 1000.0, tz=timezone.utc)
+        return datetime.fromtimestamp(float(ts_val), tz=timezone.utc)
+    ts_str = str(ts_val).strip()
+    if ts_str.isdigit():
+        val = int(ts_str)
+        if val > 1e11:
+            return datetime.fromtimestamp(val / 1000.0, tz=timezone.utc)
+        return datetime.fromtimestamp(float(val), tz=timezone.utc)
     ts_clean = ts_str.replace("Z", "+00:00")
     try:
         dt = datetime.fromisoformat(ts_clean)
@@ -501,7 +511,7 @@ class Aggregator:
                 if ts:
                     existing_points_map[ts] = p
 
-            merged_points = sorted(existing_points_map.values(), key=lambda x: x.get("timestamp", ""))
+            merged_points = sorted(existing_points_map.values(), key=lambda x: str(x.get("timestamp") or ""))
 
             # Persist archive atomically
             tmp_af = archive_file.with_suffix(".tmp")

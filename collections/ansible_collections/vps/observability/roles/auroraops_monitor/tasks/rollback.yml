@@ -68,7 +68,8 @@
         cp -a '{{ auroraops_monitor_dir }}'/spool/* '$archive_dir/'
       fi
       if [ -f '{{ auroraops_monitor_dir }}/spool.jsonl' ] && [ -s '{{ auroraops_monitor_dir }}/spool.jsonl' ]; then
-        cp -a '{{ auroraops_monitor_dir }}/spool.jsonl' '$archive_dir/spool-preserved-\$(date +%s).jsonl'
+        ts=\$(date +%s)
+        cp -a '{{ auroraops_monitor_dir }}/spool.jsonl' "\$archive_dir/spool-preserved-\$ts.jsonl"
       fi
       python3 -c \"import os; fd = os.open('$archive_dir', os.O_RDONLY); os.fsync(fd); os.close(fd)\"
     "

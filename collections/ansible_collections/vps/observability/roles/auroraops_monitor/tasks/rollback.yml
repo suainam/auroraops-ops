@@ -12,6 +12,7 @@
     file: "{{ role_path }}/../../../common/tasks/managed_timer.yml"
   vars:
     timer_name: "com.auroraops.cc15-spool-pusher"
+    timer_exec_start: "{{ lookup('env', 'HOME') }}/.auroraops/bin/cc15_spool_pusher.py"
     timer_init_system: "darwin"
     timer_enabled: false
     timer_state: stopped

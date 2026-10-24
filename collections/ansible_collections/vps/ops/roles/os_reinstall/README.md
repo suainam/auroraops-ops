@@ -18,8 +18,8 @@
 
 为防止误触导致生产事故，本角色内置四重严格防御：
 1. **默认禁用与双重确认 (Fail-Closed & Explicit Double Confirmation)**:
-   - `os_reinstall_enabled: false` 默认关闭。未开启时任务自动安全跳过，不执行任何远程探测或变更。
-   - 即使显式设置 `os_reinstall_enabled: true`，必须同时传入 `os_reinstall_confirm: true`，否则立即 fail loud 阻断执行。
+   - 统一通过 `auroraops_roles.ops.os_reinstall: false` 默认关闭。未开启时任务自动安全跳过，不执行任何远程探测或变更。
+   - 即使显式设置 `auroraops_roles.ops.os_reinstall: true`，必须同时传入 `os_reinstall_confirm: true`，否则立即 fail loud 阻断执行。
 2. **严禁 Check Mode 写入**:
    - 若处于 `--check` 模式，立即终止执行，防止任何探测代码产生非预期写入或网络副作用。
 3. **单主机执行作用域限制 (Single-Host Guard)**:
@@ -59,7 +59,7 @@
 
 | 变量名 | 默认值 | 描述 |
 | :--- | :--- | :--- |
-| `os_reinstall_enabled` | `false` | 角色全局总开关。必须显式设为 `true`。 |
+| `auroraops_roles.ops.os_reinstall` | `false` | 角色全局总开关。必须显式设为 `true`。 |
 | `os_reinstall_confirm` | `false` | 破坏性操作二次确认开关。必须显式设为 `true`。 |
 | `os_reinstall_debian_version` | `"13"` | 目标 Debian 大版本，支持 `"12"` 或 `"13"`。 |
 | `os_reinstall_username` | `"root"` | 安装后默认管理员用户名。 |
@@ -92,26 +92,31 @@ auroraops_roles:
   ops:
     os_reinstall: true
 
-os_reinstall_enabled: true
 os_reinstall_confirm: true
 os_reinstall_ssh_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... ops@control"
 os_reinstall_trigger_reboot: false  # 建议由运维人员核对输出后手动重启
 ```
 
-执行命令：
+执行命令（必须指向专有生成的 ops deploy 剧本）：
 ```bash
-ansible-playbook -i inventories/prod.ini playbooks/ops.yml --limit <target-node> --tags os_reinstall
+ansible-playbook -i inventories/prod.ini playbooks/ops/deploy.yml --limit <target-node> --tags os_reinstall
 ```
 
 ### 6.2 安装后纯净化只读验证
-等待正式系统重启就绪后，执行验证模式检查去监控效果：
+等待正式系统重启就绪后，执行独立验证剧本（内部绑定 `tasks_from: verify`）检查去监控效果：
 ```bash
-ansible-playbook -i inventories/prod.ini playbooks/ops.yml --limit <target-node> --tags os_reinstall,verify
+ansible-playbook -i inventories/prod.ini playbooks/ops/verify.yml --limit <target-node> --tags os_reinstall
 ```
 
+> [!WARNING]
+> **切勿在 deploy 剧本上执行 `--tags os_reinstall,verify`！**
+> Ansible 命令行中的多标签为逻辑 OR 关系。在 `playbooks/ops/deploy.yml` 上执行 `--tags os_reinstall,verify` 会命中所有带 `os_reinstall` 标签的任务，从而再次触发重装准备流程！
+> **只读验证必须严格且唯一通过专门生成的验证剧本 `playbooks/ops/verify.yml` 执行。**
+
 验证清单覆盖：
-1. `/etc/os-release` 存在且为 Debian 12/13；
+1. `/etc/os-release` 存在且解析出匹配的目标 `VERSION_ID`（如 `"13"` 或 `"12"`）；
 2. `/usr/local/qcloud`、`/usr/local/sa`、`/usr/local/agenttools` 物理目录均已消除；
-3. `ps aux` 中无 `sgagent`、`barad`、`tat_agent`、`yunjing` 监控进程；
-4. `systemctl` 无云监控残留 unit；
-5. 输出实际 IPv4/IPv6 地址与路由可观测状态。
+3. `pgrep -l -f '(tat_agent|barad|sgagent|yunjing)'` 无存活监控进程（返回码 1）；
+4. `dpkg-query -W -f='${binary:Package} ${db:Status-Status}\n'` 无任何处于 `installed` 状态的云监控包；
+5. `systemctl list-unit-files` 无任何云监控残留 unit 文件（返回码 0 且输出为空）；
+6. `ip -brief addr show` 仅收集并记录已识别的网络接口名称，不打印具体地址结构且不宣称双栈通用支持。

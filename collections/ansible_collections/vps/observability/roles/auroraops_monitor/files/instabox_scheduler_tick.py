@@ -50,6 +50,7 @@ class SchedulerTick:
         self,
         ssh_target: str = "instabox",
         ssh_user: str | None = None,
+        ssh_port: int | None = None,
         remote_dir: str | None = None,
         archive_dir: Path | None = None,
         ssh_identity: Path | str | None = None,
@@ -58,6 +59,7 @@ class SchedulerTick:
         self.ssh_target = ssh_target
         self.ssh_user = ssh_user
         self.effective_target = f"{self.ssh_user}@{self.ssh_target}" if self.ssh_user else self.ssh_target
+        self.ssh_port = ssh_port
         self.remote_dir = remote_dir or ("/data/home/auroraops-monitor" if self.ssh_target == "instabox" else "/var/lib/auroraops-monitor")
         self.archive_dir = archive_dir or (Path.home() / ".auroraops" / "controller_spool" / self.ssh_target)
         self.archive_dir.mkdir(parents=True, exist_ok=True)
@@ -77,6 +79,8 @@ class SchedulerTick:
         full_cmd = ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={max(1, int(min(timeout, 15)))}"]
         if self.ssh_identity and self.ssh_identity.exists():
             full_cmd += ["-o", "ControlPath=none", "-o", "IdentitiesOnly=yes", "-i", str(self.ssh_identity)]
+        if self.ssh_port:
+            full_cmd += ["-p", str(self.ssh_port)]
         full_cmd += [self.effective_target] + cmd_args
         t0 = time.monotonic()
         proc = subprocess.run(
@@ -154,6 +158,8 @@ class SchedulerTick:
             ]
             if self.ssh_identity and self.ssh_identity.exists():
                 scp_cmd += ["-o", "ControlPath=none", "-o", "IdentitiesOnly=yes", "-i", str(self.ssh_identity)]
+            if self.ssh_port:
+                scp_cmd += ["-P", str(self.ssh_port)]
             scp_cmd += [
                 f"{self.effective_target}:{remote_path}",
                 str(tmp_local),
@@ -261,6 +267,7 @@ def main():
     parser = argparse.ArgumentParser(description="External InstaBox / Node Scheduler Tick")
     parser.add_argument("--ssh-target", default=os.environ.get("INSTABOX_SSH_TARGET", "instabox"))
     parser.add_argument("--ssh-user", default=None, help="Remote SSH user")
+    parser.add_argument("--ssh-port", type=int, default=None, help="Remote SSH port")
     parser.add_argument("--remote-dir", default=None, help="Remote monitor base directory")
     parser.add_argument("--archive-dir", type=Path, default=None)
     parser.add_argument("--ssh-identity", default=None, help="Path to dedicated SSH private key")
@@ -273,6 +280,7 @@ def main():
         ssh_target=args.ssh_target,
         ssh_user=args.ssh_user,
         remote_dir=args.remote_dir,
+        ssh_port=args.ssh_port,
         archive_dir=args.archive_dir,
         ssh_identity=args.ssh_identity,
         max_duration=args.max_duration,

@@ -404,6 +404,17 @@
   when: auroraops_monitor_mode == 'aggregator'
   tags: [deploy, observability, auroraops_monitor]
 
+- name: 部署 instabox_scheduler_tick.py 采集脚本 (Aggregator)
+  become: true
+  ansible.builtin.copy:
+    src: instabox_scheduler_tick.py
+    dest: "{{ auroraops_monitor_dir }}/instabox_scheduler_tick.py"
+    owner: "{{ auroraops_monitor_user }}"
+    group: "{{ auroraops_monitor_group }}"
+    mode: "0755"
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [deploy, observability, auroraops_monitor]
+
 - name: 确保 /etc/auroraops 配置目录存在 (Aggregator)
   become: true
   ansible.builtin.file:
@@ -545,6 +556,58 @@
   when: auroraops_monitor_mode == 'aggregator'
   tags: [deploy, observability, auroraops_monitor]
 
+
+- name: 部署 auroraops_instabox_puller.service systemd unit (Aggregator)
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/auroraops_instabox_puller.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=AuroraOps Instabox Spool Puller over WireGuard
+      After=network.target wg-quick@wg0.service
+
+      [Service]
+      Type=oneshot
+      User=root
+      ExecStart=/usr/bin/python3 {{ auroraops_monitor_dir }}/instabox_scheduler_tick.py --ssh-target instabox --archive-dir {{ auroraops_monitor_dir }}/spool_inbound/instabox --remote-dir /data/home/auroraops-monitor
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 auroraops_instabox_puller.timer systemd unit (Aggregator)
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/auroraops_instabox_puller.timer
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=AuroraOps Instabox Spool Puller Timer (4h)
+
+      [Timer]
+      OnBootSec=5min
+      OnUnitActiveSec=4h
+      AccuracySec=1min
+
+      [Install]
+      WantedBy=timers.target
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 重载 systemd 并启动 instabox puller timer (Aggregator)
+  become: true
+  ansible.builtin.systemd:
+    name: auroraops_instabox_puller.timer
+    state: started
+    enabled: true
+    daemon_reload: true
+  when:
+    - auroraops_monitor_mode == 'aggregator'
+    - not ansible_check_mode
+  tags: [deploy, observability, auroraops_monitor]
 - name: 重载 systemd 并启动 CF collector timer (Aggregator)
   become: true
   ansible.builtin.systemd:

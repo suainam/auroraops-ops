@@ -572,7 +572,7 @@
       [Service]
       Type=oneshot
       User=root
-      ExecStart=/usr/bin/python3 {{ auroraops_monitor_dir }}/instabox_scheduler_tick.py --ssh-target instabox --archive-dir {{ auroraops_monitor_dir }}/spool_inbound/instabox --remote-dir /data/home/auroraops-monitor
+      ExecStart=/usr/bin/python3 {{ auroraops_monitor_dir }}/instabox_scheduler_tick.py --ssh-target 10.144.10.15 --ssh-port 22 --ssh-user user --archive-dir {{ auroraops_monitor_dir }}/spool_inbound/instabox --remote-dir /data/home/auroraops-monitor
   when: auroraops_monitor_mode == 'aggregator'
   tags: [deploy, observability, auroraops_monitor]
 

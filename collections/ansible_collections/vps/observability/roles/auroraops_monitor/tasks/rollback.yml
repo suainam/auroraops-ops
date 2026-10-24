@@ -2,9 +2,8 @@
 # Stage 7: Rollback (Fault Simulation & Reversal)
 # Restores host to exact pre-deployment state while preserving un-ACKed data.
 
-- name: 停止并卸载控制端 LaunchAgent 定时调度器 (消除并发写窗口 - Instabox)
+- name: 停止并卸载控制端 LaunchAgent 定时调度器 (消除并发写窗口)
   ansible.builtin.include_tasks: controller_scheduler_rollback.yml
-  when: auroraops_monitor_mode == 'outer_probe'
   tags: [rollback, observability, auroraops_monitor]
 
 - name: 停止并禁用 systemd timer 与 service (Host Metrics)
@@ -35,6 +34,25 @@
   become: true
   ansible.builtin.systemd:
     daemon_reload: true
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [rollback, observability, auroraops_monitor]
+
+- name: 移除受限拉取公钥授权 (qqg1299)
+  become: true
+  ansible.posix.authorized_key:
+    user: root
+    key: "{{ lookup('file', lookup('env', 'HOME') ~ '/.auroraops/keys/qqg1299_monitor_puller_ed25519.pub', errors='ignore') | default('', true) }}"
+    state: absent
+  when:
+    - auroraops_monitor_mode == 'host_metrics'
+    - lookup('file', lookup('env', 'HOME') ~ '/.auroraops/keys/qqg1299_monitor_puller_ed25519.pub', errors='ignore') | length > 0
+  tags: [rollback, observability, auroraops_monitor]
+
+- name: 移除受限命令防护脚本 (qqg1299)
+  become: true
+  ansible.builtin.file:
+    path: /usr/local/bin/auroraops_spool_puller_guard.sh
+    state: absent
   when: auroraops_monitor_mode == 'host_metrics'
   tags: [rollback, observability, auroraops_monitor]
 

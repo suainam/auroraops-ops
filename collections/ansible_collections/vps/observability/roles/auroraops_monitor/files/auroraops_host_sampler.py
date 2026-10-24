@@ -178,11 +178,58 @@ class GeoAuditCursorReader:
                 pass
         return {"inode": 0, "offset": 0, "last_updated": ""}
 
+    def _read_complete_lines(self, file_path: Path, start_offset: int) -> tuple[list[dict], int]:
+        parsed_events: list[dict] = []
+        if not file_path.exists():
+            return parsed_events, start_offset
+        curr_size = file_path.stat().st_size
+        if start_offset > curr_size:
+            start_offset = 0
+        last_valid_offset = start_offset
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                f.seek(start_offset)
+                while True:
+                    line = f.readline()
+                    if not line:
+                        break
+                    if not line.endswith("\n"):
+                        # Incomplete half-line in-flight: do not consume and do not advance offset
+                        break
+                    last_valid_offset = f.tell()
+                    line_str = line.strip()
+                    if not line_str:
+                        continue
+                    m = GEO_LINE_RE.match(line_str)
+                    if m:
+                        ts_str = m.group(1)
+                        raw_payload = m.group(2)
+                        clean_payload = redact_ips(raw_payload)
+                        try:
+                            parsed_payload = json.loads(clean_payload)
+                        except Exception:
+                            parsed_payload = {"raw": clean_payload}
+                        parsed_events.append({
+                            "log_timestamp": ts_str,
+                            "data": parsed_payload,
+                        })
+                    else:
+                        clean_line = redact_ips(line_str)
+                        parsed_events.append({
+                            "log_timestamp": datetime.now(timezone.utc).isoformat(),
+                            "raw": clean_line,
+                        })
+        except Exception:
+            pass
+        return parsed_events, last_valid_offset
+
     def read_incremental_events(self) -> tuple[list[dict], dict | None]:
         """Read new events since last cursor.
 
-        Returns (events, candidate_cursor_state).
-        Candidate cursor state MUST only be committed after successful spool write!
+        Guarantees:
+        - Drains unread tail of previous inode file upon log rotation before reading new file.
+        - Incomplete / half lines are never consumed and do not advance cursor.
+        - Candidate cursor state MUST only be committed after successful spool write!
         """
         if not self.log_path.exists():
             return [], None
@@ -195,48 +242,29 @@ class GeoAuditCursorReader:
         saved_inode = saved.get("inode", 0)
         saved_offset = saved.get("offset", 0)
 
-        # Detect log rotation or truncation
-        if curr_inode != saved_inode or curr_size < saved_offset:
-            offset = 0
-        else:
-            offset = saved_offset
-
         events: list[dict] = []
-        new_offset = offset
 
-        try:
-            with open(self.log_path, "r", encoding="utf-8", errors="replace") as f:
-                f.seek(offset)
-                while True:
-                    line = f.readline()
-                    if not line:
-                        break
-                    line_str = line.strip()
-                    if not line_str:
-                        continue
-                    m = GEO_LINE_RE.match(line_str)
-                    if m:
-                        ts_str = m.group(1)
-                        raw_payload = m.group(2)
-                        # Redact sensitive IPs before storing
-                        clean_payload = redact_ips(raw_payload)
-                        try:
-                            parsed_payload = json.loads(clean_payload)
-                        except Exception:
-                            parsed_payload = {"raw": clean_payload}
-                        events.append({
-                            "log_timestamp": ts_str,
-                            "data": parsed_payload,
-                        })
-                    else:
-                        clean_line = redact_ips(line_str)
-                        events.append({
-                            "log_timestamp": datetime.now(timezone.utc).isoformat(),
-                            "raw": clean_line,
-                        })
-                new_offset = f.tell()
-        except Exception:
-            return [], None
+        if curr_inode != saved_inode and saved_inode > 0:
+            # Drain tail of previous rotated file if still present on disk
+            old_file = None
+            if self.log_path.parent.exists():
+                for f in self.log_path.parent.iterdir():
+                    try:
+                        if f.is_file() and f.stat().st_ino == saved_inode:
+                            old_file = f
+                            break
+                    except Exception:
+                        pass
+            if old_file is not None:
+                old_events, _ = self._read_complete_lines(old_file, saved_offset)
+                events.extend(old_events)
+            # Switch to new file starting from offset 0
+            new_events, new_offset = self._read_complete_lines(self.log_path, 0)
+            events.extend(new_events)
+        else:
+            # Same inode or fresh start
+            new_events, new_offset = self._read_complete_lines(self.log_path, saved_offset)
+            events.extend(new_events)
 
         candidate = {
             "inode": curr_inode,

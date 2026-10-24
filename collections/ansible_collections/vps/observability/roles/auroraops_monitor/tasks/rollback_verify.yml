@@ -98,7 +98,6 @@
 
 - name: 验证控制端 LaunchAgent 回滚终态 (Darwin Controller)
   ansible.builtin.include_tasks: controller_scheduler_rollback_verify.yml
-  when: auroraops_monitor_mode == 'outer_probe'
   tags: [rollback_verify, observability, auroraops_monitor]
 
 - name: 验证 systemd unit 文件已清理 (Host Metrics)
@@ -127,6 +126,22 @@
   register: auroraops_monitor_post_rb_timer_active
   changed_when: false
   failed_when: auroraops_monitor_post_rb_timer_active.rc == 0
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [rollback_verify, observability, auroraops_monitor]
+
+- name: 验证受限命令防护脚本已清理 (qqg1299)
+  become: true
+  ansible.builtin.stat:
+    path: /usr/local/bin/auroraops_spool_puller_guard.sh
+  register: auroraops_monitor_guard_stat
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [rollback_verify, observability, auroraops_monitor]
+
+- name: 断言受限命令防护脚本不存在 (qqg1299)
+  ansible.builtin.assert:
+    that:
+      - not auroraops_monitor_guard_stat.stat.exists
+    fail_msg: "回滚残留: /usr/local/bin/auroraops_spool_puller_guard.sh 未被清理"
   when: auroraops_monitor_mode == 'host_metrics'
   tags: [rollback_verify, observability, auroraops_monitor]
 

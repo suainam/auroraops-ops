@@ -111,10 +111,12 @@ class BoundedSpool:
                 )
 
             active_size = self.active_file.stat().st_size if self.active_file.exists() else 0
+            is_first_record = (active_size == 0)
             # If single active file exceeds max_bytes / 2 or 10MB, roll it
             roll_threshold = min(self.max_bytes // 2, 10 * 1024 * 1024)
             if active_size > 0 and (active_size + line_len > roll_threshold):
                 self._roll_active_locked()
+                is_first_record = True
 
             # Append to active file
             with open(self.active_file, "a", encoding="utf-8") as f:
@@ -122,6 +124,12 @@ class BoundedSpool:
                 f.flush()
                 os.fsync(f.fileno())
 
+            if is_first_record:
+                created_marker = self.base_dir / f".{self.active_file.name}.created"
+                try:
+                    created_marker.write_text(str(time.time()), encoding="utf-8")
+                except Exception:
+                    pass
             _fsync_dir(self.base_dir)
 
             return {
@@ -143,15 +151,43 @@ class BoundedSpool:
             target = self.spool_dir / f"spool-{ts}_{counter}.jsonl"
             counter += 1
         self.active_file.rename(target)
+        created_marker = self.base_dir / f".{self.active_file.name}.created"
+        if created_marker.exists():
+            try:
+                created_marker.unlink()
+            except Exception:
+                pass
         _fsync_dir(self.spool_dir)
         _fsync_dir(self.base_dir)
         return target
+
+    def get_active_age_seconds(self) -> float:
+        if not self.active_file.exists() or self.active_file.stat().st_size == 0:
+            return 0.0
+        created_marker = self.base_dir / f".{self.active_file.name}.created"
+        if created_marker.exists():
+            try:
+                return max(0.0, time.time() - float(created_marker.read_text().strip()))
+            except Exception:
+                pass
+        try:
+            with open(self.active_file, "r", encoding="utf-8") as f:
+                first_line = f.readline()
+                if first_line:
+                    rec = json.loads(first_line)
+                    ts_str = rec.get("timestamp_utc") or rec.get("start_time_utc")
+                    if ts_str:
+                        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                        return max(0.0, time.time() - dt.timestamp())
+        except Exception:
+            pass
+        return max(0.0, time.time() - self.active_file.stat().st_ctime)
 
     def seal_active(self, min_age_seconds: float = 0.0) -> dict:
         lock_fd = self._acquire_lock()
         try:
             if min_age_seconds > 0.0 and self.active_file.exists():
-                file_age = time.time() - self.active_file.stat().st_mtime
+                file_age = self.get_active_age_seconds()
                 if file_age < min_age_seconds:
                     return {
                         "status": "skipped_too_young",

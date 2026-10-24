@@ -24,3 +24,9 @@ auroraops_monitor_unacked_archive_dir: "{{ '/data/auroraops-monitor-unacked-arch
 auroraops_monitor_probe_hosts: "1.1.1.1 8.8.8.8"
 auroraops_monitor_geo_audit_log: "/var/log/geo_audit/geo_audit.log"
 auroraops_monitor_roll_interval_seconds: 900
+
+# Controller timer configuration (Darwin Controller LaunchAgent)
+controller_timer_name: "{{ 'com.auroraops.instabox-scheduler' if auroraops_monitor_mode == 'outer_probe' else 'com.auroraops.qqg1299-spool-puller' }}"
+controller_timer_description: "{{ 'Instabox 4-Hour Outer Probe Scheduler' if auroraops_monitor_mode == 'outer_probe' else 'AuroraOps qqg1299 Bounded Spool Durable Puller' }}"
+controller_timer_script: "{{ 'instabox_scheduler_tick.sh' if auroraops_monitor_mode == 'outer_probe' else 'qqg1299_spool_puller.sh' }}"
+controller_timer_interval: "{{ 14400 if auroraops_monitor_mode == 'outer_probe' else 300 }}"

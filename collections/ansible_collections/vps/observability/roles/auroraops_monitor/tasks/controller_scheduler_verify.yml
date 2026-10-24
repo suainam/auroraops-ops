@@ -2,7 +2,7 @@
 - name: 验证控制端 LaunchAgent plist 存在 (Darwin Controller)
   delegate_to: localhost
   ansible.builtin.stat:
-    path: "{{ lookup('env', 'HOME') }}/Library/LaunchAgents/com.auroraops.instabox-scheduler.plist"
+    path: "{{ lookup('env', 'HOME') }}/Library/LaunchAgents/{{ controller_timer_name }}.plist"
   register: auroraops_monitor_controller_plist_stat
   tags: [verify, observability, auroraops_monitor]
 
@@ -10,7 +10,7 @@
   ansible.builtin.assert:
     that:
       - auroraops_monitor_controller_plist_stat.stat.exists
-    fail_msg: "控制端 LaunchAgent plist 不存在"
+    fail_msg: "控制端 LaunchAgent plist 不存在: {{ controller_timer_name }}.plist"
   tags: [verify, observability, auroraops_monitor]
 
 - name: 验证控制端 LaunchAgent 已在 launchd 运行注册
@@ -24,6 +24,6 @@
 - name: 断言控制端 LaunchAgent 处于已加载状态
   ansible.builtin.assert:
     that:
-      - "'com.auroraops.instabox-scheduler' in auroraops_monitor_launchctl_list.stdout"
-    fail_msg: "com.auroraops.instabox-scheduler 未在 launchctl list 中加载"
+      - "controller_timer_name in auroraops_monitor_launchctl_list.stdout"
+    fail_msg: "{{ controller_timer_name }} 未在 launchctl list 中加载"
   tags: [verify, observability, auroraops_monitor]

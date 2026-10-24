@@ -5,8 +5,8 @@
   ansible.builtin.include_tasks:
     file: "{{ role_path }}/../../../common/tasks/managed_timer.yml"
   vars:
-    timer_name: "{{ controller_timer_name | default('com.auroraops.instabox-scheduler') }}"
-    timer_exec_start: "{{ lookup('env', 'HOME') }}/.auroraops/bin/instabox_scheduler_tick.sh"
+    timer_name: "{{ controller_timer_name }}"
+    timer_exec_start: "{{ lookup('env', 'HOME') }}/.auroraops/bin/{{ controller_timer_script }}"
     timer_init_system: "darwin"
     timer_enabled: false
     timer_state: stopped
@@ -28,7 +28,7 @@
 
     plist_path = os.path.join(home, "Library/LaunchAgents", f"{timer_name}.plist")
     bin_dir = os.path.join(home, ".auroraops/bin")
-    scripts = ["instabox_scheduler_tick.sh", "instabox_scheduler_tick.py"]
+    scripts = ["instabox_scheduler_tick.sh", "instabox_scheduler_tick.py", "qqg1299_spool_puller.sh"]
 
     if not os.path.exists(baseline_file):
         if os.path.lexists(plist_path):

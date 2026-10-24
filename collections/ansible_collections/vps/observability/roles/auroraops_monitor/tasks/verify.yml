@@ -139,7 +139,6 @@
 
 - name: 验证控制端 LaunchAgent 状态 (Darwin Controller)
   ansible.builtin.include_tasks: controller_scheduler_verify.yml
-  when: auroraops_monitor_mode == 'outer_probe'
   tags: [verify, observability, auroraops_monitor]
 
 - name: 验证 systemd timer 处于活动状态 (Host Metrics)
@@ -148,6 +147,26 @@
   register: auroraops_monitor_timer_status
   changed_when: false
   failed_when: auroraops_monitor_timer_status.stdout.strip() != 'active'
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [verify, observability, auroraops_monitor]
+
+- name: 验证受限密钥执行未授权命令被拒绝 (qqg1299 安全边界核验)
+  delegate_to: localhost
+  ansible.builtin.shell: |
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i "{{ lookup('env', 'HOME') }}/.auroraops/keys/qqg1299_monitor_puller_ed25519" qqg1299 uname -a 2>&1 || true
+  register: auroraops_monitor_guard_denial
+  changed_when: false
+  failed_when: "'Access denied' not in auroraops_monitor_guard_denial.stdout"
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [verify, observability, auroraops_monitor]
+
+- name: 验证受限密钥执行 Spool 查询被安全放行 (qqg1299)
+  delegate_to: localhost
+  ansible.builtin.shell: |
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i "{{ lookup('env', 'HOME') }}/.auroraops/keys/qqg1299_monitor_puller_ed25519" qqg1299 python3 /var/lib/auroraops-monitor/spool_manager.py list
+  register: auroraops_monitor_guard_allow
+  changed_when: false
+  failed_when: auroraops_monitor_guard_allow.rc != 0
   when: auroraops_monitor_mode == 'host_metrics'
   tags: [verify, observability, auroraops_monitor]
 - name: 验证结果摘要

@@ -51,12 +51,14 @@ class SchedulerTick:
         ssh_target: str = "instabox",
         remote_dir: str | None = None,
         archive_dir: Path | None = None,
+        ssh_identity: Path | str | None = None,
         max_duration: float = MAX_LIFECYCLE_SECONDS,
     ) -> None:
         self.ssh_target = ssh_target
         self.remote_dir = remote_dir or ("/data/home/auroraops-monitor" if self.ssh_target == "instabox" else "/var/lib/auroraops-monitor")
         self.archive_dir = archive_dir or (Path.home() / ".auroraops" / "controller_spool" / self.ssh_target)
         self.archive_dir.mkdir(parents=True, exist_ok=True)
+        self.ssh_identity = Path(ssh_identity).expanduser() if ssh_identity else None
         self.max_duration = max_duration
         self.start_mono = time.monotonic()
         self.deadline = self.start_mono + self.max_duration
@@ -70,7 +72,10 @@ class SchedulerTick:
 
     def _run_ssh(self, cmd_args: list[str], timeout_cap: float = 30.0) -> tuple[int, str, str]:
         timeout = self._remaining_timeout(timeout_cap)
-        full_cmd = ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={max(1, int(min(timeout, 15)))}", self.ssh_target] + cmd_args
+        full_cmd = ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={max(1, int(min(timeout, 15)))}"]
+        if self.ssh_identity and self.ssh_identity.exists():
+            full_cmd += ["-i", str(self.ssh_identity)]
+        full_cmd += [self.ssh_target] + cmd_args
         t0 = time.monotonic()
         proc = subprocess.run(
             full_cmd,
@@ -142,6 +147,10 @@ class SchedulerTick:
                 "BatchMode=yes",
                 "-o",
                 f"ConnectTimeout={max(1, int(min(timeout, 15)))}",
+            ]
+            if self.ssh_identity and self.ssh_identity.exists():
+                scp_cmd += ["-i", str(self.ssh_identity)]
+            scp_cmd += [
                 f"{self.ssh_target}:{remote_path}",
                 str(tmp_local),
             ]
@@ -249,6 +258,7 @@ def main():
     parser.add_argument("--ssh-target", default=os.environ.get("INSTABOX_SSH_TARGET", "instabox"))
     parser.add_argument("--remote-dir", default=None, help="Remote monitor base directory")
     parser.add_argument("--archive-dir", type=Path, default=None)
+    parser.add_argument("--ssh-identity", default=None, help="Path to dedicated SSH private key")
     parser.add_argument("--max-duration", type=float, default=MAX_LIFECYCLE_SECONDS)
     parser.add_argument("--pull-only", action="store_true", help="Only pull and ACK un-ACKed sealed files without probe")
     parser.add_argument("--seal", action="store_true", help="Seal active spool before pulling (for pull-only mode)")
@@ -258,6 +268,7 @@ def main():
         ssh_target=args.ssh_target,
         remote_dir=args.remote_dir,
         archive_dir=args.archive_dir,
+        ssh_identity=args.ssh_identity,
         max_duration=args.max_duration,
     )
     if args.pull_only:

@@ -19,6 +19,8 @@
 
 - name: 捕获并固化部署前 Baseline Fact 与逐文件基线快照 (首次部署前原子固化，不覆盖)
   become: true
+  args:
+    executable: /bin/bash
   ansible.builtin.shell: |
     set -euo pipefail
     python3 -c '

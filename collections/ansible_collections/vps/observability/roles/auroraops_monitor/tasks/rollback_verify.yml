@@ -18,6 +18,8 @@
 
 - name: 依据 Manifest 审计验证工作目录与文件回滚终态 (非虚断言)
   become: true
+  args:
+    executable: /bin/bash
   ansible.builtin.shell: |
     set -euo pipefail
     python3 -c '

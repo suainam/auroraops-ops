@@ -517,8 +517,8 @@ class Aggregator:
         key = os.environ.get("TYPESAFE_API_KEY", self.env.get("TYPESAFE_API_KEY", ""))
         if key:
             return key
-        if self.magpie_providers.exists():
-            try:
+        try:
+            if self.magpie_providers.exists():
                 with open(self.magpie_providers, "r", encoding="utf-8") as f:
                     pdata = json.load(f)
                     for item in pdata.get("providers", []):
@@ -526,10 +526,9 @@ class Aggregator:
                             k = item.get("key")
                             if k:
                                 return k
-            except Exception:
-                pass
+        except (PermissionError, OSError):
+            pass
         return ""
-
     def evaluate_with_jev(self, summary_facts: dict[str, Any]) -> dict[str, Any]:
         """Call TypeSafe Jev SystemOne decide contract on normalized secret-free facts."""
         key = self._resolve_typesafe_key()

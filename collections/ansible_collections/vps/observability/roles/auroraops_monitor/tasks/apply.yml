@@ -171,6 +171,23 @@
     mode: "0755"
   when: auroraops_monitor_mode == 'aggregator'
   tags: [deploy, observability, auroraops_monitor]
+- name: 从 Magpie 获取 TypeSafe Provider 凭据 (Aggregator)
+  become: true
+  no_log: true
+  ansible.builtin.shell: |
+    python3 -c '
+    import json
+    with open("/opt/dockers/magpie/config/magpie/providers.json") as f:
+        d = json.load(f)
+    for p in d.get("providers", []):
+        if p.get("id") == "typesafe":
+            print(p.get("key", ""))
+            break
+    '
+  register: auroraops_monitor_magpie_typesafe_key
+  changed_when: false
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [deploy, observability, auroraops_monitor]
 
 - name: 部署 /etc/auroraops/auroraops_monitor.env 敏感配置 (Aggregator)
   become: true
@@ -183,6 +200,7 @@
     content: |
       CF_ADMIN_PASSWORD={{ vault_opcotoai_smtp_freemail_worker_admin_pwd | default('') }}
       CF_WORKER_URL={{ cf_probe_worker_url | default('https://cf-server-monitor.suainam.workers.dev') }}
+      TYPESAFE_API_KEY={{ auroraops_monitor_magpie_typesafe_key.stdout | default('') }}
   when: auroraops_monitor_mode == 'aggregator'
   tags: [deploy, observability, auroraops_monitor]
 

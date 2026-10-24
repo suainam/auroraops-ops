@@ -27,21 +27,38 @@
   when: auroraops_monitor_mode == 'outer_probe'
   tags: [deploy, check, preflight, verify, observability, auroraops_monitor]
 
-- name: 探测 /var/lib 目录可达性 (Host Metrics)
+- name: 探测 /var/lib 目录可达性 (Host Metrics & Aggregator)
   become: true
   ansible.builtin.stat:
     path: /var/lib
   register: auroraops_monitor_preflight_var_lib
-  when: auroraops_monitor_mode == 'host_metrics'
+  when: auroraops_monitor_mode in ['host_metrics', 'aggregator']
   tags: [deploy, check, preflight, verify, observability, auroraops_monitor]
 
-- name: 断言 /var/lib 存在且为目录 (Host Metrics)
+- name: 断言 /var/lib 存在且为目录 (Host Metrics & Aggregator)
   ansible.builtin.assert:
     that:
       - auroraops_monitor_preflight_var_lib.stat.exists
       - auroraops_monitor_preflight_var_lib.stat.isdir
     fail_msg: "/var/lib 不存在或不是目录，系统基础目录异常"
-  when: auroraops_monitor_mode == 'host_metrics'
+  when: auroraops_monitor_mode in ['host_metrics', 'aggregator']
+  tags: [deploy, check, preflight, verify, observability, auroraops_monitor]
+
+- name: 探测 /opt/dockers/magpie 目录可达性 (Aggregator)
+  become: true
+  ansible.builtin.stat:
+    path: /opt/dockers/magpie
+  register: auroraops_monitor_preflight_magpie
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [deploy, check, preflight, verify, observability, auroraops_monitor]
+
+- name: 断言 /opt/dockers/magpie 存在且为目录 (Aggregator)
+  ansible.builtin.assert:
+    that:
+      - auroraops_monitor_preflight_magpie.stat.exists
+      - auroraops_monitor_preflight_magpie.stat.isdir
+    fail_msg: "/opt/dockers/magpie 不存在或不是目录，Magpie 运行底座异常"
+  when: auroraops_monitor_mode == 'aggregator'
   tags: [deploy, check, preflight, verify, observability, auroraops_monitor]
 
 - name: 检查现有 auroraops_monitor 基线事实

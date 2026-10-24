@@ -36,7 +36,7 @@
   ansible.builtin.stat:
     path: "{{ item }}"
   register: auroraops_monitor_verify_stats
-  loop: "{{ [auroraops_monitor_dir, auroraops_monitor_spool_dir, auroraops_monitor_dir ~ '/spool_manager.py', auroraops_monitor_dir ~ '/auroraops_probe.py', auroraops_monitor_dir ~ '/ipquality_geo_probe.py'] if auroraops_monitor_mode == 'outer_probe' else [auroraops_monitor_dir, auroraops_monitor_spool_dir, auroraops_monitor_dir ~ '/spool_manager.py', auroraops_monitor_dir ~ '/auroraops_host_sampler.py'] }}"
+  loop: "{{ [auroraops_monitor_dir, auroraops_monitor_spool_dir, auroraops_monitor_dir ~ '/spool_manager.py', auroraops_monitor_dir ~ '/auroraops_probe.py', auroraops_monitor_dir ~ '/ipquality_geo_probe.py'] if auroraops_monitor_mode == 'outer_probe' else ([auroraops_monitor_dir, auroraops_monitor_dir ~ '/spool_manager.py', auroraops_monitor_dir ~ '/auroraops_aggregator.py', auroraops_monitor_dir ~ '/reports', auroraops_monitor_dir ~ '/cf_history'] if auroraops_monitor_mode == 'aggregator' else [auroraops_monitor_dir, auroraops_monitor_spool_dir, auroraops_monitor_dir ~ '/spool_manager.py', auroraops_monitor_dir ~ '/auroraops_host_sampler.py']) }}"
   tags: [verify, observability, auroraops_monitor]
 
 - name: 断言目录与脚本均存在
@@ -135,10 +135,63 @@
   changed_when: false
   failed_when: auroraops_monitor_schema_val.rc != 0
   tags: [verify, observability, auroraops_monitor]
+  when: auroraops_monitor_mode != 'aggregator'
+
+- name: 验证 Aggregator 周报生成、Schema 与脱敏 (Aggregator)
+  become: true
+  become_user: "{{ auroraops_monitor_user }}"
+  ansible.builtin.command:
+    cmd: |
+      python3 -c "
+      import json, sys
+      from pathlib import Path
+      sys.path.insert(0, '{{ auroraops_monitor_dir }}')
+      from auroraops_aggregator import Aggregator
+
+      rep_dir = Path('{{ auroraops_monitor_dir }}/reports')
+      latest_json = rep_dir / 'weekly_report_latest.json'
+      latest_md = rep_dir / 'weekly_report_latest.md'
+
+      if not latest_json.exists():
+          print('weekly_report_latest.json missing')
+          sys.exit(1)
+      if not latest_md.exists():
+          print('weekly_report_latest.md missing')
+          sys.exit(2)
+
+      with open(latest_json, 'r', encoding='utf-8') as f:
+          content_json = f.read()
+          data = json.loads(content_json)
+
+      with open(latest_md, 'r', encoding='utf-8') as f:
+          content_md = f.read()
+
+      # Assert zero secret leakage
+      Aggregator.assert_sanitized(content_json)
+      Aggregator.assert_sanitized(content_md)
+
+      # Validate Schema
+      for key in ['period', 'instabox', 'qqg1299', 'cf_monitor', 'jev_evaluation']:
+          if key not in data:
+              print(f'Missing required top-level key: {key}')
+              sys.exit(3)
+
+      jev = data['jev_evaluation']
+      if jev.get('status') not in ('evaluated', 'pending_review'):
+          print(f'Invalid Jev status: {jev.get(\"status\")}')
+          sys.exit(4)
+
+      print(f'SUCCESS: verified weekly report JSON and MD, Jev status: {jev.get(\"status\")}')
+      "
+  register: auroraops_monitor_report_val
+  changed_when: false
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [verify, observability, auroraops_monitor]
 
 
 - name: 验证控制端 LaunchAgent 状态 (Darwin Controller)
   ansible.builtin.include_tasks: controller_scheduler_verify.yml
+  when: auroraops_monitor_mode != 'aggregator'
   tags: [verify, observability, auroraops_monitor]
 
 - name: 验证 systemd timer 处于活动状态 (Host Metrics)
@@ -148,6 +201,15 @@
   changed_when: false
   failed_when: auroraops_monitor_timer_status.stdout.strip() != 'active'
   when: auroraops_monitor_mode == 'host_metrics'
+  tags: [verify, observability, auroraops_monitor]
+
+- name: 验证 weekly report systemd timer 处于活动状态 (Aggregator)
+  ansible.builtin.command:
+    cmd: systemctl is-active auroraops_weekly_report.timer
+  register: auroraops_monitor_weekly_timer_status
+  changed_when: false
+  failed_when: auroraops_monitor_weekly_timer_status.stdout.strip() != 'active'
+  when: auroraops_monitor_mode == 'aggregator'
   tags: [verify, observability, auroraops_monitor]
 
 - name: 验证受限密钥执行未授权命令被拒绝 (qqg1299 安全边界核验)
@@ -171,5 +233,5 @@
   tags: [verify, observability, auroraops_monitor]
 - name: 验证结果摘要
   ansible.builtin.debug:
-    msg: "Verify SUCCESS: Fact present, {{ auroraops_monitor_schema_val.stdout }}"
+    msg: "Verify SUCCESS: Fact present, {{ auroraops_monitor_schema_val.stdout if auroraops_monitor_mode != 'aggregator' else auroraops_monitor_report_val.stdout }}"
   tags: [verify, observability, auroraops_monitor]

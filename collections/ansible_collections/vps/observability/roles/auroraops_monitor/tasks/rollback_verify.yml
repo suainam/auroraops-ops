@@ -38,8 +38,8 @@
     dir_meta = fact.get("dir_metadata", {})
     pre_dir_exists = fact.get("pre_deploy_dir_exists", False)
 
-    scripts = ["spool_manager.py", "auroraops_probe.py", "ipquality_geo_probe.py", "auroraops_host_sampler.py"]
-    runtime_files = ["spool.lock", "spool.jsonl", "metrics.jsonl", "geo_audit_cursor.json"]
+    scripts = ["spool_manager.py", "auroraops_probe.py", "ipquality_geo_probe.py", "auroraops_host_sampler.py", "auroraops_aggregator.py"]
+    runtime_files = ["spool.lock", "spool.jsonl", "metrics.jsonl", "geo_audit_cursor.json", "cf_token.json"]
 
     if not dir_meta.get("exists", pre_dir_exists):
         assert not os.path.exists(monitor_dir), f"Directory {monitor_dir} should be absent but exists"
@@ -90,7 +90,7 @@
 
 - name: 检查无孤儿残留进程
   ansible.builtin.command:
-    cmd: "pgrep -f 'auroraops_probe.py|spool_manager.py|auroraops_host_sampler.py'"
+    cmd: "pgrep -f 'auroraops_probe.py|spool_manager.py|auroraops_host_sampler.py|auroraops_aggregator.py'"
   register: auroraops_monitor_orphan_proc
   changed_when: false
   failed_when: auroraops_monitor_orphan_proc.rc == 0
@@ -98,6 +98,37 @@
 
 - name: 验证控制端 LaunchAgent 回滚终态 (Darwin Controller)
   ansible.builtin.include_tasks: controller_scheduler_rollback_verify.yml
+  when: auroraops_monitor_mode != 'aggregator'
+  tags: [rollback_verify, observability, auroraops_monitor]
+
+- name: 验证 weekly report systemd unit 文件与配置已清理 (Aggregator)
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: auroraops_monitor_aggregator_unit_stats
+  loop:
+    - /etc/systemd/system/auroraops_weekly_report.service
+    - /etc/systemd/system/auroraops_weekly_report.timer
+    - /etc/auroraops/auroraops_monitor.env
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [rollback_verify, observability, auroraops_monitor]
+
+- name: 断言 weekly report systemd unit 文件完全不存在 (Aggregator)
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists
+    fail_msg: "回滚失败: {{ item.item }} 仍然残留"
+  loop: "{{ auroraops_monitor_aggregator_unit_stats.results | default([]) }}"
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [rollback_verify, observability, auroraops_monitor]
+
+- name: 验证 weekly report systemd timer 已完全停用 (Aggregator)
+  ansible.builtin.command:
+    cmd: systemctl is-active auroraops_weekly_report.timer
+  register: auroraops_monitor_post_rb_weekly_timer_active
+  changed_when: false
+  failed_when: auroraops_monitor_post_rb_weekly_timer_active.rc == 0
+  when: auroraops_monitor_mode == 'aggregator'
   tags: [rollback_verify, observability, auroraops_monitor]
 
 - name: 验证 systemd unit 文件已清理 (Host Metrics)
@@ -145,13 +176,13 @@
   when: auroraops_monitor_mode == 'host_metrics'
   tags: [rollback_verify, observability, auroraops_monitor]
 
-- name: 验证专用非特权用户已移除 (qqg1299)
+- name: 验证专用非特权用户已移除 (Host Metrics & Aggregator)
   ansible.builtin.command:
     cmd: "id -u {{ auroraops_monitor_user }}"
   register: auroraops_monitor_post_rb_user
   changed_when: false
   failed_when: auroraops_monitor_post_rb_user.rc == 0
-  when: auroraops_monitor_mode == 'host_metrics'
+  when: auroraops_monitor_mode in ['host_metrics', 'aggregator']
   tags: [rollback_verify, observability, auroraops_monitor]
 
 - name: 回滚验证终态合规输出

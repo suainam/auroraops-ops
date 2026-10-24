@@ -57,8 +57,8 @@
     spool_meta = get_meta(spool_dir)
 
     files_meta = {}
-    scripts = ["spool_manager.py", "auroraops_probe.py", "ipquality_geo_probe.py", "auroraops_host_sampler.py"]
-    runtime_files = ["spool.lock", "spool.jsonl", "metrics.jsonl", "geo_audit_cursor.json"]
+    scripts = ["spool_manager.py", "auroraops_probe.py", "ipquality_geo_probe.py", "auroraops_host_sampler.py", "auroraops_aggregator.py"]
+    runtime_files = ["spool.lock", "spool.jsonl", "metrics.jsonl", "geo_audit_cursor.json", "cf_token.json"]
     os.makedirs(backup_dir, exist_ok=True)
     os.chmod(backup_dir, 0o700)
 
@@ -95,16 +95,16 @@
   when: not (auroraops_monitor_baseline_exists | default(false))
   tags: [deploy, observability, auroraops_monitor]
 
-- name: 创建监控专用非特权系统组 (Host Metrics)
+- name: 创建监控专用非特权系统组 (Host Metrics & Aggregator)
   become: true
   ansible.builtin.group:
     name: "{{ auroraops_monitor_group }}"
     system: true
     state: present
-  when: auroraops_monitor_mode == 'host_metrics'
+  when: auroraops_monitor_mode in ['host_metrics', 'aggregator']
   tags: [deploy, observability, auroraops_monitor]
 
-- name: 创建监控专用非特权系统用户 (Host Metrics)
+- name: 创建监控专用非特权系统用户 (Host Metrics & Aggregator)
   become: true
   ansible.builtin.user:
     name: "{{ auroraops_monitor_user }}"
@@ -114,7 +114,7 @@
     system: true
     create_home: false
     state: present
-  when: auroraops_monitor_mode == 'host_metrics'
+  when: auroraops_monitor_mode in ['host_metrics', 'aggregator']
   tags: [deploy, observability, auroraops_monitor]
 
 - name: 创建监控工作目录与 spool 目录
@@ -130,6 +130,113 @@
     - "{{ auroraops_monitor_spool_dir }}"
   tags: [deploy, observability, auroraops_monitor]
 
+
+- name: 创建 Aggregator 专属子目录 (Aggregator)
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ auroraops_monitor_user }}"
+    group: "{{ auroraops_monitor_group }}"
+    mode: "0755"
+  loop:
+    - "{{ auroraops_monitor_dir }}/spool_inbound"
+    - "{{ auroraops_monitor_dir }}/spool_inbound/instabox"
+    - "{{ auroraops_monitor_dir }}/spool_inbound/qqg1299"
+    - "{{ auroraops_monitor_dir }}/cf_history"
+    - "{{ auroraops_monitor_dir }}/reports"
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 auroraops_aggregator.py 汇总与周报生成器 (Aggregator)
+  become: true
+  ansible.builtin.copy:
+    src: auroraops_aggregator.py
+    dest: "{{ auroraops_monitor_dir }}/auroraops_aggregator.py"
+    owner: "{{ auroraops_monitor_user }}"
+    group: "{{ auroraops_monitor_group }}"
+    mode: "0755"
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 确保 /etc/auroraops 配置目录存在 (Aggregator)
+  become: true
+  ansible.builtin.file:
+    path: /etc/auroraops
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 /etc/auroraops/auroraops_monitor.env 敏感配置 (Aggregator)
+  become: true
+  no_log: true
+  ansible.builtin.copy:
+    dest: /etc/auroraops/auroraops_monitor.env
+    owner: root
+    group: "{{ auroraops_monitor_group }}"
+    mode: "0640"
+    content: |
+      CF_ADMIN_PASSWORD={{ vault_opcotoai_smtp_freemail_worker_admin_pwd | default('') }}
+      CF_WORKER_URL={{ cf_probe_worker_url | default('https://cf-server-monitor.suainam.workers.dev') }}
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 auroraops_weekly_report.service systemd unit (Aggregator)
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/auroraops_weekly_report.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=AuroraOps Authoritative Metrics Aggregator & Weekly Reporter
+      After=network.target
+
+      [Service]
+      Type=oneshot
+      User={{ auroraops_monitor_user }}
+      Group={{ auroraops_monitor_group }}
+      EnvironmentFile=-/etc/auroraops/auroraops_monitor.env
+      ExecStart=/usr/bin/python3 {{ auroraops_monitor_dir }}/auroraops_aggregator.py --report-all
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 auroraops_weekly_report.timer systemd unit (Aggregator)
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/auroraops_weekly_report.timer
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=AuroraOps Weekly Reporter Timer
+
+      [Timer]
+      OnCalendar=Mon *-*-* 02:00:00
+      Persistent=true
+      AccuracySec=1min
+
+      [Install]
+      WantedBy=timers.target
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 重载 systemd 并启动 weekly report timer (Aggregator)
+  become: true
+  ansible.builtin.systemd:
+    name: auroraops_weekly_report.timer
+    daemon_reload: true
+    state: started
+    enabled: true
+  when:
+    - auroraops_monitor_mode == 'aggregator'
+    - not ansible_check_mode
+  tags: [deploy, observability, auroraops_monitor]
 
 - name: 部署 spool_manager.py 管理器
   become: true
@@ -294,7 +401,9 @@
   tags: [deploy, observability, auroraops_monitor]
 - name: 纳入控制端 LaunchAgent 跨平台定时调度管理 (Darwin Controller)
   ansible.builtin.include_tasks: controller_scheduler_apply.yml
-  when: not ansible_check_mode
+  when:
+    - not ansible_check_mode
+    - auroraops_monitor_mode != 'aggregator'
   tags: [deploy, observability, auroraops_monitor]
 
 
@@ -319,6 +428,30 @@
   changed_when: true
   when:
     - auroraops_monitor_mode == 'host_metrics'
+    - not ansible_check_mode
+    - not (auroraops_monitor_preflight_dir_stat.stat.exists | default(false))
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 控制端推送 Spool 事实至 cc15 Inbound (Aggregator)
+  delegate_to: localhost
+  ansible.builtin.command:
+    cmd: "python3 {{ role_path }}/files/cc15_spool_pusher.py --ssh-target {{ inventory_hostname }}"
+  register: auroraops_monitor_spool_push
+  changed_when: false
+  when:
+    - auroraops_monitor_mode == 'aggregator'
+    - not ansible_check_mode
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 执行初次指标汇总与周报生成 (Aggregator)
+  become: true
+  become_user: "{{ auroraops_monitor_user }}"
+  ansible.builtin.command:
+    cmd: "python3 {{ auroraops_monitor_dir }}/auroraops_aggregator.py --report-all"
+  register: auroraops_monitor_init_report
+  changed_when: true
+  when:
+    - auroraops_monitor_mode == 'aggregator'
     - not ansible_check_mode
     - not (auroraops_monitor_preflight_dir_stat.stat.exists | default(false))
   tags: [deploy, observability, auroraops_monitor]

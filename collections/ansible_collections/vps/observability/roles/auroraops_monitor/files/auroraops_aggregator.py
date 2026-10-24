@@ -580,6 +580,11 @@ class Aggregator:
                 except Exception:
                     pass
 
+            # Online detection: last_updated within 2h
+            lu_str = srv.get("last_updated")
+            lu_dt = parse_iso_utc(lu_str) if lu_str else None
+            is_online = bool(lu_dt and (now - lu_dt).total_seconds() < 7200)
+
             # Filter points in window and sort
             window_points = []
             for p in all_archived:

@@ -1,13 +1,5 @@
 ---
-- name: 强制执行安全断言与操作员交互确认 (Include safety guard)
-  ansible.builtin.include_tasks: assert_safety.yml
-
-- name: 发起目标主机重启进入系统安装环境
-  ansible.builtin.command:
-    argv:
-      - "shutdown"
-      - "-r"
-      - "now"
-  register: os_reinstall_reboot_res
-  changed_when: true
+- name: 触发目标主机重启进入系统安装 (Trigger reboot into installer)
+  vps.ops.os_reinstall_execute:
+    action: reboot
   tags: [deploy, ops, os_reinstall, phase6]

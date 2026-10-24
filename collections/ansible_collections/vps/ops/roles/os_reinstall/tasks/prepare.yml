@@ -1,36 +1,10 @@
 ---
-- name: 强制执行安全断言与操作员交互确认 (Include safety guard)
-  ansible.builtin.include_tasks: assert_safety.yml
-
-- name: 校验本地缓存重装脚本存在且 SHA256 完整一致 (Verify immutable script checksum before execution)
-  ansible.builtin.stat:
-    path: "{{ os_reinstall_script_path }}"
-    checksum_algorithm: sha256
-  register: _os_reinstall_script_stat
-  tags: [deploy, ops, os_reinstall, phase6]
-
-- name: 断言脚本文件存在且哈希完全匹配 (Fail closed if tampered or missing)
-  ansible.builtin.assert:
-    that:
-      - _os_reinstall_script_stat.stat.exists
-      - _os_reinstall_script_stat.stat.checksum == os_reinstall_script_sha256
-    fail_msg: >-
-      重装脚本 {{ os_reinstall_script_path }} 校验失败！文件不存在或 SHA256 ({{ _os_reinstall_script_stat.stat.checksum | default('none') }}) 与预期 ({{ os_reinstall_script_sha256 }}) 不匹配。
-    quiet: true
-  tags: [deploy, ops, os_reinstall, phase6]
-
-- name: 执行 reinstall.sh 配置 Debian 目标系统与环境
-  ansible.builtin.command:
-    argv:
-      - "{{ os_reinstall_script_path }}"
-      - "debian"
-      - "{{ os_reinstall_debian_version }}"
-      - "--ssh-key"
-      - "{{ os_reinstall_ssh_pubkey | trim }}"
-      - "--ssh-port"
-      - "{{ os_reinstall_ssh_port | string }}"
-      - "--username"
-      - "{{ os_reinstall_username | trim }}"
-  register: os_reinstall_prepare_res
-  changed_when: true
+- name: 校验脚本哈希并配置 Debian 安装环境 (Prepare Debian install with checksum guard)
+  vps.ops.os_reinstall_execute:
+    action: prepare
+    script_path: "{{ os_reinstall_script_path }}"
+    debian_version: "{{ os_reinstall_debian_version }}"
+    ssh_pubkey: "{{ os_reinstall_ssh_pubkey }}"
+    ssh_port: "{{ os_reinstall_ssh_port }}"
+    username: "{{ os_reinstall_username }}"
   tags: [deploy, ops, os_reinstall, phase6]

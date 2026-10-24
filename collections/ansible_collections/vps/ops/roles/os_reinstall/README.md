@@ -20,11 +20,13 @@
 1. **脱离通用编排 (Excluded from Global/Domain Deployments)**:
    - 角色在 `catalog/roles.yml` 中被显式标记为 `exclusions`，绝不出现在 `playbooks/deploy.yml` 或 `playbooks/ops/deploy.yml` 中。
    - 仅能通过专用手动剧本 `playbooks/ops/os_reinstall.yml` 触发。
-2. **强制交互式 TTY 确切主机名二次确认 (Interactive TTY Confirmation)**:
-   - 无论通过 `main.yml` 还是直接调用 `tasks_from: download/prepare/reboot`，均强制经过 `assert_safety.yml`。
-   - 任务通过 `ansible.builtin.pause` 要求操作员在终端交互输入目标主机的确切 `inventory_hostname`。
-   - **非 TTY 拒绝**：若在管道、CI、脚本或非交互环境中运行，pause 无法获取终端交互输入并返回空，断言立即 fail closed 阻断。
-   - 输入的主机名与 `inventory_hostname` 不一致时立即拒绝。
+2. **原子化控制端动作插件不可绕过防御 (Indivisible Action Plugin Enforcement)**:
+   - 核心任务（`download.yml`、`prepare.yml`、`reboot.yml`）统一通过专属控制端 Action 插件 `vps.ops.os_reinstall_execute` 执行。
+   - **零注册变量信任**：不依赖任务间变量传递或 `register`（杜绝 `-e` extra-vars 伪造授权）。
+   - **标签与跳步穿透防御**：每次操作直接在 Action 插件内部原子执行校验与调用，即使通过 `--tags os_reinstall` 或 `--start-at-task` 亦无法跳过防护。
+   - **控制端 `/dev/tty` 强制交互确认**：插件直接打开控制端 `/dev/tty` 要求交互输入确切 `inventory_hostname`。在管道、CI、脱机后台会话（`start_new_session=True`）等无 TTY 环境下直接 fail closed 阻断。
+   - **权威 Check Mode 探测**：通过 `self._task.check_mode` 权威阻断 check 模式。
+   - **硬编码防篡改 SHA256 校验**：`prepare` 操作在插件内部执行 `stat` 校验，未通过不可变哈希比对前严禁发起任何远程脚本执行。
 3. **操作员外部备份恢复就绪责任声明**:
    - 必须通过命令行显式传入 `-e os_reinstall_backup_operator_ack='<target_host>'`。
    - 诚实规约：系统不伪称自动化验证外部备份有效性，但严格强制操作员对该特定主机的外部备份和异地救砖手段做出责任声明。

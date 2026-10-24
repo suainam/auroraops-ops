@@ -170,8 +170,9 @@
 
     flock -x "$lock_file" bash -euo pipefail -c '
       archive="$1"
-      spool_dir="$2"
+      monitor_dir="$2"
       spool_file="$3"
+      spool_dir="$monitor_dir/spool"
 
       for sub in spool spool_inbound cf_history reports; do
         sdir="$monitor_dir/$sub"

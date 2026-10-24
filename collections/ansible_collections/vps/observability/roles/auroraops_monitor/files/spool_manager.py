@@ -19,6 +19,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -44,13 +45,18 @@ def compute_sha256(file_path: Path) -> str:
 
 
 class BoundedSpool:
-    def __init__(self, base_dir: Path | None = None, max_bytes: int | None = None) -> None:
+    def __init__(
+        self,
+        base_dir: Path | None = None,
+        max_bytes: int | None = None,
+        active_name: str | None = None,
+    ) -> None:
         self.base_dir = base_dir or Path(os.environ.get("AURORAOPS_SPOOL_DIR", DEFAULT_BASE_DIR))
         self.spool_dir = self.base_dir / "spool"
-        self.active_file = self.base_dir / "spool.jsonl"
+        active_file_str = active_name or os.environ.get("AURORAOPS_SPOOL_ACTIVE_NAME", "spool.jsonl")
+        self.active_file = self.base_dir / active_file_str
         self.lock_file = self.base_dir / "spool.lock"
         self.max_bytes = max_bytes or int(os.environ.get("AURORAOPS_SPOOL_MAX_BYTES", DEFAULT_MAX_BYTES))
-
     def ensure_dirs(self) -> None:
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.spool_dir.mkdir(parents=True, exist_ok=True)
@@ -136,9 +142,19 @@ class BoundedSpool:
         _fsync_dir(self.base_dir)
         return target
 
-    def seal_active(self) -> dict:
+    def seal_active(self, min_age_seconds: float = 0.0) -> dict:
         lock_fd = self._acquire_lock()
         try:
+            if min_age_seconds > 0.0 and self.active_file.exists():
+                file_age = time.time() - self.active_file.stat().st_mtime
+                if file_age < min_age_seconds:
+                    return {
+                        "status": "skipped_too_young",
+                        "sealed_path": None,
+                        "sealed_filename": None,
+                        "size_bytes": self.active_file.stat().st_size,
+                        "age_seconds": round(file_age, 1),
+                    }
             sealed = self._roll_active_locked()
             sha256 = compute_sha256(sealed) if sealed else None
             return {
@@ -217,12 +233,14 @@ def main():
     parser = argparse.ArgumentParser(description="Bounded Spool Manager")
     parser.add_argument("--base-dir", type=Path, default=None)
     parser.add_argument("--max-bytes", type=int, default=None)
+    parser.add_argument("--active-name", type=str, default=None)
     sub = parser.add_subparsers(dest="command", required=True)
 
     append_p = sub.add_parser("append")
     append_p.add_argument("--json", dest="json_str", default=None, help="JSON record string")
 
-    sub.add_parser("seal")
+    seal_p = sub.add_parser("seal")
+    seal_p.add_argument("--older-than", type=float, default=0.0, help="Only seal if active file age >= seconds")
     sub.add_parser("list")
     sub.add_parser("status")
 
@@ -231,8 +249,7 @@ def main():
     ack_p.add_argument("--sha256", dest="sha256", required=True, help="Expected SHA256 checksum (required)")
 
     args = parser.parse_args()
-    spool = BoundedSpool(base_dir=args.base_dir, max_bytes=args.max_bytes)
-
+    spool = BoundedSpool(base_dir=args.base_dir, max_bytes=args.max_bytes, active_name=args.active_name)
     if args.command == "append":
         raw = args.json_str
         if raw is None:
@@ -240,7 +257,7 @@ def main():
         res = spool.append_record(raw)
         print(json.dumps(res, indent=2))
     elif args.command == "seal":
-        res = spool.seal_active()
+        res = spool.seal_active(min_age_seconds=args.older_than)
         print(json.dumps(res, indent=2))
     elif args.command == "list":
         res = spool.list_unacked_files()

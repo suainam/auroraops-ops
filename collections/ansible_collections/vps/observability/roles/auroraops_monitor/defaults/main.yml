@@ -1,12 +1,26 @@
 ---
 # auroraops_monitor default variables
 auroraops_monitor_enabled: true
-auroraops_monitor_dir: /data/home/auroraops-monitor
-auroraops_monitor_spool_dir: /data/home/auroraops-monitor/spool
-auroraops_monitor_spool_file: /data/home/auroraops-monitor/spool.jsonl
-auroraops_monitor_lock_file: /data/home/auroraops-monitor/spool.lock
+
+# Mode: 'outer_probe' (instabox) or 'host_metrics' (qqg1299 / native Linux)
+auroraops_monitor_mode: "{{ 'outer_probe' if inventory_hostname == 'instabox' else 'host_metrics' }}"
+
+auroraops_monitor_dir: "{{ '/data/home/auroraops-monitor' if auroraops_monitor_mode == 'outer_probe' else '/var/lib/auroraops-monitor' }}"
+auroraops_monitor_active_file: "{{ 'spool.jsonl' if auroraops_monitor_mode == 'outer_probe' else 'metrics.jsonl' }}"
+auroraops_monitor_spool_dir: "{{ auroraops_monitor_dir }}/spool"
+auroraops_monitor_spool_file: "{{ auroraops_monitor_dir }}/{{ auroraops_monitor_active_file }}"
+auroraops_monitor_lock_file: "{{ auroraops_monitor_dir }}/spool.lock"
 auroraops_monitor_fact_path: /etc/ansible/facts.d/auroraops_monitor.fact
 auroraops_monitor_max_spool_bytes: 52428800  # 50MB
-auroraops_monitor_user: user
-auroraops_monitor_group: user
+
+auroraops_monitor_user: "{{ 'user' if auroraops_monitor_mode == 'outer_probe' else 'root' }}"
+auroraops_monitor_group: "{{ 'user' if auroraops_monitor_mode == 'outer_probe' else 'root' }}"
+
+auroraops_monitor_backup_dir: "{{ '/data/auroraops-monitor-baseline-backup' if auroraops_monitor_mode == 'outer_probe' else auroraops_monitor_dir ~ '-baseline-backup' }}"
+auroraops_monitor_audit_file: "{{ '/data/auroraops-monitor-rollback-audit.json' if auroraops_monitor_mode == 'outer_probe' else auroraops_monitor_dir ~ '-rollback-audit.json' }}"
+auroraops_monitor_unacked_archive_dir: "{{ '/data/auroraops-monitor-unacked-archive' if auroraops_monitor_mode == 'outer_probe' else auroraops_monitor_dir ~ '-unacked-archive' }}"
+
+# Mode-specific parameters
 auroraops_monitor_probe_hosts: "1.1.1.1 8.8.8.8"
+auroraops_monitor_geo_audit_log: "/var/log/geo_audit/geo_audit.log"
+auroraops_monitor_roll_interval_seconds: 900

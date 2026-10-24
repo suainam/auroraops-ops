@@ -49,11 +49,13 @@ class SchedulerTick:
     def __init__(
         self,
         ssh_target: str = "instabox",
+        remote_dir: str | None = None,
         archive_dir: Path | None = None,
         max_duration: float = MAX_LIFECYCLE_SECONDS,
     ) -> None:
         self.ssh_target = ssh_target
-        self.archive_dir = archive_dir or DEFAULT_CONTROLLER_ARCHIVE
+        self.remote_dir = remote_dir or ("/data/home/auroraops-monitor" if self.ssh_target == "instabox" else "/var/lib/auroraops-monitor")
+        self.archive_dir = archive_dir or (Path.home() / ".auroraops" / "controller_spool" / self.ssh_target)
         self.archive_dir.mkdir(parents=True, exist_ok=True)
         self.max_duration = max_duration
         self.start_mono = time.monotonic()
@@ -95,21 +97,21 @@ class SchedulerTick:
             time.sleep(1.0)
         raise RuntimeError(f"Cold wake failed after {attempts} attempts: {last_err}")
 
-    def drain_unacked(self) -> list[dict]:
+    def drain_unacked(self, seal_first: bool = True) -> list[dict]:
         t0 = time.monotonic()
-        # 1. Ask remote to seal active spool if it exists
-        rc_seal, out_seal, err_seal = self._run_ssh(
-            ["python3", "/data/home/auroraops-monitor/spool_manager.py", "seal"], timeout_cap=15.0
-        )
-        if rc_seal != 0:
-            raise RuntimeError(f"Failed to seal remote spool: {err_seal or out_seal}")
+        if seal_first:
+            # 1. Ask remote to seal active spool if it exists
+            rc_seal, out_seal, err_seal = self._run_ssh(
+                ["python3", f"{self.remote_dir}/spool_manager.py", "seal"], timeout_cap=15.0
+            )
+            if rc_seal != 0:
+                raise RuntimeError(f"Failed to seal remote spool: {err_seal or out_seal}")
         # 2. List sealed un-ACKed files
         rc, stdout, stderr = self._run_ssh(
-            ["python3", "/data/home/auroraops-monitor/spool_manager.py", "list"], timeout_cap=15.0
+            ["python3", f"{self.remote_dir}/spool_manager.py", "list"], timeout_cap=15.0
         )
         if rc != 0:
             raise RuntimeError(f"Failed to list un-ACKed files: {stderr}")
-
         try:
             files_meta = json.loads(stdout)
         except Exception as exc:
@@ -126,8 +128,7 @@ class SchedulerTick:
                 raise ValueError(f"Security: rejected non-conforming remote filename: '{fname}'")
 
             # Fixed remote path, zero traversal
-            remote_path = f"/data/home/auroraops-monitor/spool/{fname}"
-
+            remote_path = f"{self.remote_dir}/spool/{fname}"
             # Temp local destination
             tmp_local = self.archive_dir / f".tmp_{fname}.{uuid.uuid4().hex[:8]}"
             final_local = self.archive_dir / fname
@@ -170,7 +171,7 @@ class SchedulerTick:
 
             # Send safe ACK with SHA256 binding
             ack_rc, ack_out, ack_err = self._run_ssh(
-                ["python3", "/data/home/auroraops-monitor/spool_manager.py", "ack", fname, "--sha256", local_sha],
+                ["python3", f"{self.remote_dir}/spool_manager.py", "ack", fname, "--sha256", local_sha],
                 timeout_cap=15.0,
             )
             if ack_rc != 0:
@@ -193,7 +194,7 @@ class SchedulerTick:
     def execute_probe(self) -> dict:
         t0 = time.monotonic()
         rc, stdout, stderr = self._run_ssh(
-            ["python3", "/data/home/auroraops-monitor/auroraops_probe.py"], timeout_cap=35.0
+            ["python3", f"{self.remote_dir}/auroraops_probe.py"], timeout_cap=35.0
         )
         if rc != 0:
             raise RuntimeError(f"Probe execution failed: {stderr or stdout}")
@@ -244,17 +245,42 @@ class SchedulerTick:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="External InstaBox Scheduler Tick")
+    parser = argparse.ArgumentParser(description="External InstaBox / Node Scheduler Tick")
     parser.add_argument("--ssh-target", default=os.environ.get("INSTABOX_SSH_TARGET", "instabox"))
+    parser.add_argument("--remote-dir", default=None, help="Remote monitor base directory")
     parser.add_argument("--archive-dir", type=Path, default=None)
     parser.add_argument("--max-duration", type=float, default=MAX_LIFECYCLE_SECONDS)
+    parser.add_argument("--pull-only", action="store_true", help="Only pull and ACK un-ACKed sealed files without probe")
+    parser.add_argument("--seal", action="store_true", help="Seal active spool before pulling (for pull-only mode)")
     args = parser.parse_args()
 
     tick = SchedulerTick(
         ssh_target=args.ssh_target,
+        remote_dir=args.remote_dir,
         archive_dir=args.archive_dir,
         max_duration=args.max_duration,
     )
+    if args.pull_only:
+        try:
+            pulled = tick.drain_unacked(seal_first=args.seal)
+            summary = {
+                "ssh_target": tick.ssh_target,
+                "archive_dir": str(tick.archive_dir),
+                "pulled_count": len(pulled),
+                "pulled": pulled,
+                "status": "ok",
+            }
+            print(json.dumps(summary, indent=2, ensure_ascii=False))
+            sys.exit(0)
+        except Exception as exc:
+            err_res = {
+                "status": "failed",
+                "error": str(exc),
+                "elapsed_seconds": round(time.monotonic() - tick.start_mono, 3),
+            }
+            print(json.dumps(err_res, indent=2), file=sys.stderr)
+            sys.exit(2)
+
     try:
         res = tick.run()
         print(json.dumps(res, indent=2, ensure_ascii=False))
@@ -268,7 +294,6 @@ def main():
         }
         print(json.dumps(err_res, indent=2), file=sys.stderr)
         sys.exit(2)
-
 
 if __name__ == "__main__":
     main()

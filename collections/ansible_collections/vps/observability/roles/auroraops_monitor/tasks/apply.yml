@@ -5,7 +5,7 @@
 - name: 清理历史回滚审计快照 (若存在)
   become: true
   ansible.builtin.file:
-    path: /data/auroraops-monitor-rollback-audit.json
+    path: "{{ auroraops_monitor_audit_file }}"
     state: absent
   tags: [deploy, observability, auroraops_monitor]
 
@@ -57,9 +57,8 @@
     spool_meta = get_meta(spool_dir)
 
     files_meta = {}
-    scripts = ["spool_manager.py", "auroraops_probe.py", "ipquality_geo_probe.py"]
-    runtime_files = ["spool.lock", "spool.jsonl"]
-
+    scripts = ["spool_manager.py", "auroraops_probe.py", "ipquality_geo_probe.py", "auroraops_host_sampler.py"]
+    runtime_files = ["spool.lock", "spool.jsonl", "metrics.jsonl", "geo_audit_cursor.json"]
     os.makedirs(backup_dir, exist_ok=True)
     os.chmod(backup_dir, 0o700)
 
@@ -92,7 +91,7 @@
         json.dump(fact_data, f, indent=2)
     os.replace(tmp_path, fact_path)
     os.chmod(fact_path, 0o644)
-    ' "{{ auroraops_monitor_dir }}" "{{ auroraops_monitor_spool_dir }}" "{{ auroraops_monitor_fact_path }}" "/data/auroraops-monitor-baseline-backup" "{{ auroraops_monitor_max_spool_bytes | default(52428800) }}"
+    ' "{{ auroraops_monitor_dir }}" "{{ auroraops_monitor_spool_dir }}" "{{ auroraops_monitor_fact_path }}" "{{ auroraops_monitor_backup_dir }}" "{{ auroraops_monitor_max_spool_bytes | default(52428800) }}"
   when: not (auroraops_monitor_baseline_exists | default(false))
   tags: [deploy, observability, auroraops_monitor]
 
@@ -120,7 +119,7 @@
     mode: "0755"
   tags: [deploy, observability, auroraops_monitor]
 
-- name: 部署 auroraops_probe.py 探针程序
+- name: 部署 auroraops_probe.py 探针程序 (Instabox)
   become: true
   ansible.builtin.copy:
     src: auroraops_probe.py
@@ -128,8 +127,10 @@
     owner: "{{ auroraops_monitor_user }}"
     group: "{{ auroraops_monitor_group }}"
     mode: "0755"
+  when: auroraops_monitor_mode == 'outer_probe'
   tags: [deploy, observability, auroraops_monitor]
-- name: 部署 ipquality_geo_probe.py 依赖库 (复用 ops.ipquality 权威源)
+
+- name: 部署 ipquality_geo_probe.py 依赖库 (Instabox)
   become: true
   ansible.builtin.copy:
     src: "{{ role_path }}/../../../ops/roles/ipquality/files/ipquality_geo_probe.py"
@@ -137,15 +138,82 @@
     owner: "{{ auroraops_monitor_user }}"
     group: "{{ auroraops_monitor_group }}"
     mode: "0755"
+  when: auroraops_monitor_mode == 'outer_probe'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 auroraops_host_sampler.py 采样器 (Host Metrics)
+  become: true
+  ansible.builtin.copy:
+    src: auroraops_host_sampler.py
+    dest: "{{ auroraops_monitor_dir }}/auroraops_host_sampler.py"
+    owner: "{{ auroraops_monitor_user }}"
+    group: "{{ auroraops_monitor_group }}"
+    mode: "0755"
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 auroraops-monitor.service systemd unit (Host Metrics)
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/auroraops-monitor.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=AuroraOps Host Metrics & Geo Cursor Sampler
+      After=network.target
+
+      [Service]
+      Type=oneshot
+      User={{ auroraops_monitor_user }}
+      Group={{ auroraops_monitor_group }}
+      ExecStart=/usr/bin/python3 {{ auroraops_monitor_dir }}/auroraops_host_sampler.py
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 auroraops-monitor.timer systemd unit (Host Metrics)
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/auroraops-monitor.timer
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=AuroraOps Host Metrics & Geo Cursor Sampler Timer (5min)
+
+      [Timer]
+      OnBootSec=1min
+      OnUnitActiveSec=5min
+      AccuracySec=10s
+
+      [Install]
+      WantedBy=timers.target
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 重载 systemd 并启动 timer (Host Metrics)
+  become: true
+  ansible.builtin.systemd:
+    name: auroraops-monitor.timer
+    daemon_reload: true
+    state: started
+    enabled: true
+  when:
+    - auroraops_monitor_mode == 'host_metrics'
+    - not ansible_check_mode
   tags: [deploy, observability, auroraops_monitor]
 
 - name: 纳入控制端 LaunchAgent 跨平台定时调度管理 (Darwin Controller)
   ansible.builtin.include_tasks: controller_scheduler_apply.yml
-  when: not ansible_check_mode
+  when:
+    - auroraops_monitor_mode == 'outer_probe'
+    - not ansible_check_mode
   tags: [deploy, observability, auroraops_monitor]
 
 
-- name: 初始化探针并生成首条 Bounded Spool 记录 (若 spool.jsonl 尚不存在)
+- name: 初始化探针并生成首条 Bounded Spool 记录 (Instabox)
   become: true
   become_user: "{{ auroraops_monitor_user }}"
   ansible.builtin.command:
@@ -153,6 +221,19 @@
   register: auroraops_monitor_init_run
   changed_when: true
   when:
+    - auroraops_monitor_mode == 'outer_probe'
+    - not ansible_check_mode
+    - not (auroraops_monitor_preflight_dir_stat.stat.exists | default(false))
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 执行初次采样并生成首条 Host Metrics 记录 (Host Metrics)
+  become: true
+  ansible.builtin.command:
+    cmd: "python3 {{ auroraops_monitor_dir }}/auroraops_host_sampler.py"
+  register: auroraops_monitor_init_host_sample
+  changed_when: true
+  when:
+    - auroraops_monitor_mode == 'host_metrics'
     - not ansible_check_mode
     - not (auroraops_monitor_preflight_dir_stat.stat.exists | default(false))
   tags: [deploy, observability, auroraops_monitor]

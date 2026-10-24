@@ -95,6 +95,28 @@
   when: not (auroraops_monitor_baseline_exists | default(false))
   tags: [deploy, observability, auroraops_monitor]
 
+- name: 创建监控专用非特权系统组 (Host Metrics)
+  become: true
+  ansible.builtin.group:
+    name: "{{ auroraops_monitor_group }}"
+    system: true
+    state: present
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 创建监控专用非特权系统用户 (Host Metrics)
+  become: true
+  ansible.builtin.user:
+    name: "{{ auroraops_monitor_user }}"
+    group: "{{ auroraops_monitor_group }}"
+    home: "{{ auroraops_monitor_dir }}"
+    shell: /bin/bash
+    system: true
+    create_home: false
+    state: present
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [deploy, observability, auroraops_monitor]
+
 - name: 创建监控工作目录与 spool 目录
   become: true
   ansible.builtin.file:
@@ -229,28 +251,47 @@
   when: auroraops_monitor_mode == 'host_metrics'
   tags: [deploy, observability, auroraops_monitor]
 
-- name: 部署 auroraops_spool_puller_guard.sh 受限命令防护脚本 (qqg1299)
+- name: 部署 auroraops_spool_puller_guard.py 受限命令防护脚本 (qqg1299)
   become: true
   ansible.builtin.copy:
-    src: auroraops_spool_puller_guard.sh
-    dest: /usr/local/bin/auroraops_spool_puller_guard.sh
+    src: auroraops_spool_puller_guard.py
+    dest: /usr/local/bin/auroraops_spool_puller_guard.py
     owner: root
     group: root
     mode: "0755"
   when: auroraops_monitor_mode == 'host_metrics'
   tags: [deploy, observability, auroraops_monitor]
 
-- name: 授权受限拉取密钥并绑定 forced command allowlist (qqg1299)
+- name: 确保监控专用非特权用户 .ssh 目录存在 (qqg1299)
+  become: true
+  ansible.builtin.file:
+    path: "{{ auroraops_monitor_dir }}/.ssh"
+    state: directory
+    owner: "{{ auroraops_monitor_user }}"
+    group: "{{ auroraops_monitor_group }}"
+    mode: "0700"
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 授权受限拉取密钥至专用非特权用户 (qqg1299)
   become: true
   ansible.posix.authorized_key:
-    user: root
+    user: "{{ auroraops_monitor_user }}"
     key: "{{ auroraops_monitor_puller_pubkey_raw.content | b64decode }}"
-    key_options: 'command="/usr/local/bin/auroraops_spool_puller_guard.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty'
+    key_options: 'command="/usr/local/bin/auroraops_spool_puller_guard.py",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty'
     comment: "auroraops-monitor-puller@qqg1299"
     state: present
   when: auroraops_monitor_mode == 'host_metrics'
   tags: [deploy, observability, auroraops_monitor]
 
+- name: 确保 root authorized_keys 中不残留受限拉取公钥 (qqg1299)
+  become: true
+  ansible.posix.authorized_key:
+    user: root
+    key: "{{ auroraops_monitor_puller_pubkey_raw.content | b64decode }}"
+    state: absent
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [deploy, observability, auroraops_monitor]
 - name: 纳入控制端 LaunchAgent 跨平台定时调度管理 (Darwin Controller)
   ansible.builtin.include_tasks: controller_scheduler_apply.yml
   when: not ansible_check_mode

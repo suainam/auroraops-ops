@@ -153,7 +153,7 @@
 - name: 验证受限密钥执行未授权命令被拒绝 (qqg1299 安全边界核验)
   delegate_to: localhost
   ansible.builtin.shell: |
-    ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ControlPath=none -o IdentitiesOnly=yes -i "{{ lookup('env', 'HOME') }}/.auroraops/keys/qqg1299_monitor_puller_ed25519" qqg1299 uname -a 2>&1 || true
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ControlPath=none -o IdentitiesOnly=yes -i "{{ lookup('env', 'HOME') }}/.auroraops/keys/qqg1299_monitor_puller_ed25519" "{{ auroraops_monitor_user }}@qqg1299" uname -a 2>&1 || true
   register: auroraops_monitor_guard_denial
   changed_when: false
   failed_when: "'Access denied' not in auroraops_monitor_guard_denial.stdout"
@@ -163,7 +163,7 @@
 - name: 验证受限密钥执行 Spool 查询被安全放行 (qqg1299)
   delegate_to: localhost
   ansible.builtin.shell: |
-    ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ControlPath=none -o IdentitiesOnly=yes -i "{{ lookup('env', 'HOME') }}/.auroraops/keys/qqg1299_monitor_puller_ed25519" qqg1299 python3 /var/lib/auroraops-monitor/spool_manager.py list
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ControlPath=none -o IdentitiesOnly=yes -i "{{ lookup('env', 'HOME') }}/.auroraops/keys/qqg1299_monitor_puller_ed25519" "{{ auroraops_monitor_user }}@qqg1299" python3 /var/lib/auroraops-monitor/spool_manager.py list
   register: auroraops_monitor_guard_allow
   changed_when: false
   failed_when: auroraops_monitor_guard_allow.rc != 0

@@ -49,12 +49,15 @@ class SchedulerTick:
     def __init__(
         self,
         ssh_target: str = "instabox",
+        ssh_user: str | None = None,
         remote_dir: str | None = None,
         archive_dir: Path | None = None,
         ssh_identity: Path | str | None = None,
         max_duration: float = MAX_LIFECYCLE_SECONDS,
     ) -> None:
         self.ssh_target = ssh_target
+        self.ssh_user = ssh_user
+        self.effective_target = f"{self.ssh_user}@{self.ssh_target}" if self.ssh_user else self.ssh_target
         self.remote_dir = remote_dir or ("/data/home/auroraops-monitor" if self.ssh_target == "instabox" else "/var/lib/auroraops-monitor")
         self.archive_dir = archive_dir or (Path.home() / ".auroraops" / "controller_spool" / self.ssh_target)
         self.archive_dir.mkdir(parents=True, exist_ok=True)
@@ -63,7 +66,6 @@ class SchedulerTick:
         self.start_mono = time.monotonic()
         self.deadline = self.start_mono + self.max_duration
         self.timing: dict[str, float] = {}
-
     def _remaining_timeout(self, cap: float = 30.0) -> float:
         rem = self.deadline - time.monotonic()
         if rem <= 0:
@@ -75,7 +77,7 @@ class SchedulerTick:
         full_cmd = ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={max(1, int(min(timeout, 15)))}"]
         if self.ssh_identity and self.ssh_identity.exists():
             full_cmd += ["-o", "ControlPath=none", "-o", "IdentitiesOnly=yes", "-i", str(self.ssh_identity)]
-        full_cmd += [self.ssh_target] + cmd_args
+        full_cmd += [self.effective_target] + cmd_args
         t0 = time.monotonic()
         proc = subprocess.run(
             full_cmd,
@@ -142,6 +144,7 @@ class SchedulerTick:
             timeout = self._remaining_timeout(30.0)
             scp_cmd = [
                 "scp",
+                "-O",
                 "-q",
                 "-o",
                 "BatchMode=yes",
@@ -151,7 +154,7 @@ class SchedulerTick:
             if self.ssh_identity and self.ssh_identity.exists():
                 scp_cmd += ["-o", "ControlPath=none", "-o", "IdentitiesOnly=yes", "-i", str(self.ssh_identity)]
             scp_cmd += [
-                f"{self.ssh_target}:{remote_path}",
+                f"{self.effective_target}:{remote_path}",
                 str(tmp_local),
             ]
             scp_rc = subprocess.run(scp_cmd, timeout=timeout).returncode
@@ -256,6 +259,7 @@ class SchedulerTick:
 def main():
     parser = argparse.ArgumentParser(description="External InstaBox / Node Scheduler Tick")
     parser.add_argument("--ssh-target", default=os.environ.get("INSTABOX_SSH_TARGET", "instabox"))
+    parser.add_argument("--ssh-user", default=None, help="Remote SSH user")
     parser.add_argument("--remote-dir", default=None, help="Remote monitor base directory")
     parser.add_argument("--archive-dir", type=Path, default=None)
     parser.add_argument("--ssh-identity", default=None, help="Path to dedicated SSH private key")
@@ -266,6 +270,7 @@ def main():
 
     tick = SchedulerTick(
         ssh_target=args.ssh_target,
+        ssh_user=args.ssh_user,
         remote_dir=args.remote_dir,
         archive_dir=args.archive_dir,
         ssh_identity=args.ssh_identity,

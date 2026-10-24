@@ -37,21 +37,35 @@
   when: auroraops_monitor_mode == 'host_metrics'
   tags: [rollback, observability, auroraops_monitor]
 
-- name: 移除受限拉取公钥授权 (qqg1299)
-  become: true
-  ansible.posix.authorized_key:
-    user: root
-    key: "{{ lookup('file', lookup('env', 'HOME') ~ '/.auroraops/keys/qqg1299_monitor_puller_ed25519.pub', errors='ignore') | default('', true) }}"
-    state: absent
-  when:
-    - auroraops_monitor_mode == 'host_metrics'
-    - lookup('file', lookup('env', 'HOME') ~ '/.auroraops/keys/qqg1299_monitor_puller_ed25519.pub', errors='ignore') | length > 0
-  tags: [rollback, observability, auroraops_monitor]
-
 - name: 移除受限命令防护脚本 (qqg1299)
   become: true
   ansible.builtin.file:
+    path: /usr/local/bin/auroraops_spool_puller_guard.py
+    state: absent
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [rollback, observability, auroraops_monitor]
+
+- name: 移除历史受限命令防护脚本 (若存在)
+  become: true
+  ansible.builtin.file:
     path: /usr/local/bin/auroraops_spool_puller_guard.sh
+    state: absent
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [rollback, observability, auroraops_monitor]
+
+- name: 移除专用非特权系统用户 (qqg1299)
+  become: true
+  ansible.builtin.user:
+    name: "{{ auroraops_monitor_user }}"
+    state: absent
+    remove: false
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [rollback, observability, auroraops_monitor]
+
+- name: 移除专用非特权系统组 (qqg1299)
+  become: true
+  ansible.builtin.group:
+    name: "{{ auroraops_monitor_group }}"
     state: absent
   when: auroraops_monitor_mode == 'host_metrics'
   tags: [rollback, observability, auroraops_monitor]

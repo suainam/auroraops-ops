@@ -132,7 +132,7 @@
 - name: 验证受限命令防护脚本已清理 (qqg1299)
   become: true
   ansible.builtin.stat:
-    path: /usr/local/bin/auroraops_spool_puller_guard.sh
+    path: /usr/local/bin/auroraops_spool_puller_guard.py
   register: auroraops_monitor_guard_stat
   when: auroraops_monitor_mode == 'host_metrics'
   tags: [rollback_verify, observability, auroraops_monitor]
@@ -141,7 +141,16 @@
   ansible.builtin.assert:
     that:
       - not auroraops_monitor_guard_stat.stat.exists
-    fail_msg: "回滚残留: /usr/local/bin/auroraops_spool_puller_guard.sh 未被清理"
+    fail_msg: "回滚残留: /usr/local/bin/auroraops_spool_puller_guard.py 未被清理"
+  when: auroraops_monitor_mode == 'host_metrics'
+  tags: [rollback_verify, observability, auroraops_monitor]
+
+- name: 验证专用非特权用户已移除 (qqg1299)
+  ansible.builtin.command:
+    cmd: "id -u {{ auroraops_monitor_user }}"
+  register: auroraops_monitor_post_rb_user
+  changed_when: false
+  failed_when: auroraops_monitor_post_rb_user.rc == 0
   when: auroraops_monitor_mode == 'host_metrics'
   tags: [rollback_verify, observability, auroraops_monitor]
 

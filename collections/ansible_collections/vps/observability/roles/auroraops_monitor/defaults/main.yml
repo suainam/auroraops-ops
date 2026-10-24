@@ -13,8 +13,8 @@ auroraops_monitor_lock_file: "{{ auroraops_monitor_dir }}/spool.lock"
 auroraops_monitor_fact_path: /etc/ansible/facts.d/auroraops_monitor.fact
 auroraops_monitor_max_spool_bytes: 52428800  # 50MB
 
-auroraops_monitor_user: "{{ 'user' if auroraops_monitor_mode == 'outer_probe' else 'root' }}"
-auroraops_monitor_group: "{{ 'user' if auroraops_monitor_mode == 'outer_probe' else 'root' }}"
+auroraops_monitor_user: "{{ 'user' if auroraops_monitor_mode == 'outer_probe' else 'auroraops-monitor' }}"
+auroraops_monitor_group: "{{ 'user' if auroraops_monitor_mode == 'outer_probe' else 'auroraops-monitor' }}"
 
 auroraops_monitor_backup_dir: "{{ '/data/auroraops-monitor-baseline-backup' if auroraops_monitor_mode == 'outer_probe' else auroraops_monitor_dir ~ '-baseline-backup' }}"
 auroraops_monitor_audit_file: "{{ '/data/auroraops-monitor-rollback-audit.json' if auroraops_monitor_mode == 'outer_probe' else auroraops_monitor_dir ~ '-rollback-audit.json' }}"

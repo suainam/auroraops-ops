@@ -4,6 +4,7 @@ set -euo pipefail
 PULLER_KEY="${HOME}/.auroraops/keys/qqg1299_monitor_puller_ed25519"
 ARGS=(
     "--ssh-target" "qqg1299"
+    "--ssh-user" "auroraops-monitor"
     "--remote-dir" "/var/lib/auroraops-monitor"
     "--pull-only"
     "--seal"

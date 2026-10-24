@@ -29,15 +29,13 @@ case "$SSH_ORIGINAL_COMMAND" in
             exit 1
         fi
         ;;
-    "scp -f "*"/var/lib/auroraops-monitor/spool/"*)
-        # Validate that SCP target is strictly inside /var/lib/auroraops-monitor/spool/
-        target="${SSH_ORIGINAL_COMMAND#scp -f }"
-        target="${target#\"}"
-        target="${target%\"}"
+    scp\ *"-f"*)
+        eval "cmd_args=($SSH_ORIGINAL_COMMAND)"
+        target="${cmd_args[-1]}"
         if [[ "$target" =~ ^/var/lib/auroraops-monitor/spool/spool-[0-9]{8}T[0-9]{6}Z(_[0-9]+)?\.jsonl$ ]]; then
-            exec scp -f "$target"
+            exec $SSH_ORIGINAL_COMMAND
         else
-            echo "Access denied: SCP path not permitted" >&2
+            echo "Access denied: SCP path not permitted: '$target'" >&2
             exit 1
         fi
         ;;

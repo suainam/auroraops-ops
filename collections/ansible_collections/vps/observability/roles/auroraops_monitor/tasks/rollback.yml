@@ -7,6 +7,17 @@
   when: auroraops_monitor_mode != 'aggregator'
   tags: [rollback, observability, auroraops_monitor]
 
+- name: 卸载控制端 cc15-spool-pusher LaunchAgent (Darwin Controller)
+  ansible.builtin.include_tasks:
+    file: "{{ role_path }}/../../../common/tasks/managed_timer.yml"
+  vars:
+    timer_name: "com.auroraops.cc15-spool-pusher"
+    timer_init_system: "darwin"
+    timer_enabled: false
+    timer_state: stopped
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [rollback, observability, auroraops_monitor]
+
 - name: 停止并禁用 weekly report systemd timer 与 service (Aggregator)
   become: true
   ansible.builtin.systemd:

@@ -175,9 +175,9 @@
   no_log: true
   ansible.builtin.copy:
     dest: /etc/auroraops/auroraops_monitor.env
-    owner: root
+    owner: "{{ auroraops_monitor_user }}"
     group: "{{ auroraops_monitor_group }}"
-    mode: "0640"
+    mode: "0600"
     content: |
       CF_ADMIN_PASSWORD={{ vault_opcotoai_smtp_freemail_worker_admin_pwd | default('') }}
       CF_WORKER_URL={{ cf_probe_worker_url | default('https://cf-server-monitor.suainam.workers.dev') }}
@@ -432,10 +432,41 @@
     - not (auroraops_monitor_preflight_dir_stat.stat.exists | default(false))
   tags: [deploy, observability, auroraops_monitor]
 
-- name: 控制端推送 Spool 事实至 cc15 Inbound (Aggregator)
+- name: 部署控制端 cc15_spool_pusher.py 脚本 (Darwin Controller)
+  delegate_to: localhost
+  ansible.builtin.copy:
+    src: cc15_spool_pusher.py
+    dest: "{{ lookup('env', 'HOME') }}/.auroraops/bin/cc15_spool_pusher.py"
+    mode: "0755"
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 纳入控制端 cc15-spool-pusher LaunchAgent 定时调度 (Darwin Controller)
+  ansible.builtin.include_tasks:
+    file: "{{ role_path }}/../../../common/tasks/managed_timer.yml"
+  vars:
+    timer_name: "com.auroraops.cc15-spool-pusher"
+    timer_description: "AuroraOps cc15 Spool Pusher"
+    timer_exec_start: "{{ lookup('env', 'HOME') }}/.auroraops/bin/cc15_spool_pusher.py"
+    timer_exec_args:
+      - "/usr/bin/python3"
+      - "{{ lookup('env', 'HOME') }}/.auroraops/bin/cc15_spool_pusher.py"
+      - "--ssh-target"
+      - "{{ inventory_hostname }}"
+    timer_interval_seconds: 300
+    timer_log_dir: "{{ lookup('env', 'HOME') }}/Library/Logs/AuroraOps"
+    timer_init_system: "darwin"
+    timer_enabled: true
+    timer_state: started
+  when:
+    - auroraops_monitor_mode == 'aggregator'
+    - not ansible_check_mode
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 立即触发首轮控制端 Spool 同步 (Aggregator)
   delegate_to: localhost
   ansible.builtin.command:
-    cmd: "python3 {{ role_path }}/files/cc15_spool_pusher.py --ssh-target {{ inventory_hostname }}"
+    cmd: "python3 {{ lookup('env', 'HOME') }}/.auroraops/bin/cc15_spool_pusher.py --ssh-target {{ inventory_hostname }}"
   register: auroraops_monitor_spool_push
   changed_when: false
   when:

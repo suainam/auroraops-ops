@@ -46,7 +46,6 @@
             assert os.path.isfile(sp), f"Script {sp} was pre-existing but is missing"
         else:
             assert not os.path.lexists(sp), f"Script {sp} should be absent"
-
-    os.remove(audit_file)
     ' "{{ controller_timer_name | default('com.auroraops.instabox-scheduler') }}" "{{ lookup('env', 'HOME') }}" "{{ lookup('env', 'HOME') }}/.auroraops/state/{{ controller_timer_name | default('com.auroraops.instabox-scheduler') }}.audit.json"
+  changed_when: false
   tags: [rollback_verify, observability, auroraops_monitor]

@@ -69,6 +69,7 @@
                 if not info.get("pre_exists", False):
                     assert not os.path.lexists(target), f"Runtime file {target} should be absent"
     ' /data/auroraops-monitor-rollback-audit.json "{{ auroraops_monitor_dir }}"
+  changed_when: false
   tags: [rollback_verify, observability, auroraops_monitor]
 - name: 验证宿主机保护资产完好无损 (/data/home 与预置目录)
   become: true
@@ -102,13 +103,6 @@
 
 - name: 验证控制端 LaunchAgent 回滚终态 (Darwin Controller)
   ansible.builtin.include_tasks: controller_scheduler_rollback_verify.yml
-  tags: [rollback_verify, observability, auroraops_monitor]
-
-- name: 清理回滚审计基线快照
-  become: true
-  ansible.builtin.file:
-    path: /data/auroraops-monitor-rollback-audit.json
-    state: absent
   tags: [rollback_verify, observability, auroraops_monitor]
 
 - name: 回滚验证终态合规输出

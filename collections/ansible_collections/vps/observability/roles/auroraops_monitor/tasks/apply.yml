@@ -2,6 +2,13 @@
 # Stage 4: Deploy / Apply
 # Persists baseline fact, creates directory, deploys scripts, and initializes spool.
 
+- name: 清理历史回滚审计快照 (若存在)
+  become: true
+  ansible.builtin.file:
+    path: /data/auroraops-monitor-rollback-audit.json
+    state: absent
+  tags: [deploy, observability, auroraops_monitor]
+
 - name: 确保 facts.d 目录存在
   become: true
   ansible.builtin.file:

@@ -53,7 +53,12 @@ class BoundedSpool:
     ) -> None:
         self.base_dir = base_dir or Path(os.environ.get("AURORAOPS_SPOOL_DIR", DEFAULT_BASE_DIR))
         self.spool_dir = self.base_dir / "spool"
-        active_file_str = active_name or os.environ.get("AURORAOPS_SPOOL_ACTIVE_NAME", "spool.jsonl")
+        active_file_str = active_name or os.environ.get("AURORAOPS_SPOOL_ACTIVE_NAME")
+        if not active_file_str:
+            if (self.base_dir / "metrics.jsonl").exists() and not (self.base_dir / "spool.jsonl").exists():
+                active_file_str = "metrics.jsonl"
+            else:
+                active_file_str = "spool.jsonl"
         self.active_file = self.base_dir / active_file_str
         self.lock_file = self.base_dir / "spool.lock"
         self.max_bytes = max_bytes or int(os.environ.get("AURORAOPS_SPOOL_MAX_BYTES", DEFAULT_MAX_BYTES))

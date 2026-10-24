@@ -8,7 +8,7 @@
 > 
 > **此操作将永久清空磁盘上的所有数据！**
 > 本角色具备不可逆性，**绝不支持自动 rollback**。重装前必须满足以下前置条件：
-> 1. 已在外部完成核心数据异地归档与快照备份；
+> 1. 已在外部完成核心数据异地归档与快照备份，并通过操作员明确声明确认；
 > 2. 具备云厂商外部带外控制台（如腾讯云/阿里云 VNC 救援终端）权限以应对引导异常；
 > 3. 已获得明确的操作授权，严禁在生产运行时无通知触发。
 
@@ -16,42 +16,40 @@
 
 ## 2. 角色安全防御机制
 
-为防止误触导致生产事故，本角色内置四重严格防御：
-1. **默认禁用与双重确认 (Fail-Closed & Explicit Double Confirmation)**:
-   - 统一通过 `auroraops_roles.ops.os_reinstall: false` 默认关闭。未开启时任务自动安全跳过，不执行任何远程探测或变更。
-   - 即使显式设置 `auroraops_roles.ops.os_reinstall: true`，必须同时传入 `os_reinstall_confirm: true`，否则立即 fail loud 阻断执行。
-2. **严禁 Check Mode 写入**:
-   - 若处于 `--check` 模式，立即终止执行，防止任何探测代码产生非预期写入或网络副作用。
-3. **单主机执行作用域限制 (Single-Host Guard)**:
+为防止误触导致生产事故，本角色内置不可绕过的多重硬防御：
+1. **脱离通用编排 (Excluded from Global/Domain Deployments)**:
+   - 角色在 `catalog/roles.yml` 中被显式标记为 `exclusions`，绝不出现在 `playbooks/deploy.yml` 或 `playbooks/ops/deploy.yml` 中。
+   - 仅能通过专用手动剧本 `playbooks/ops/os_reinstall.yml` 触发。
+2. **强制交互式 TTY 确切主机名二次确认 (Interactive TTY Confirmation)**:
+   - 无论通过 `main.yml` 还是直接调用 `tasks_from: download/prepare/reboot`，均强制经过 `assert_safety.yml`。
+   - 任务通过 `ansible.builtin.pause` 要求操作员在终端交互输入目标主机的确切 `inventory_hostname`。
+   - **非 TTY 拒绝**：若在管道、CI、脚本或非交互环境中运行，pause 无法获取终端交互输入并返回空，断言立即 fail closed 阻断。
+   - 输入的主机名与 `inventory_hostname` 不一致时立即拒绝。
+3. **操作员外部备份恢复就绪责任声明**:
+   - 必须通过命令行显式传入 `-e os_reinstall_backup_operator_ack='<target_host>'`。
+   - 诚实规约：系统不伪称自动化验证外部备份有效性，但严格强制操作员对该特定主机的外部备份和异地救砖手段做出责任声明。
+4. **不可变脚本校验 (Immutable Pinned Checksum)**:
+   - 上游脚本严格锁定 Git commit (`2252ca7615cd672dc1d9e67c52243db4ac859151`) 与 SHA256 哈希值 (`84daf5f1220ebdaf8e2d3db780e5f6b5d3a4d66a1fa70b353731662cd19a0010`)。
+   - 下载使用 `checksum: "sha256:..."`，执行前 `prepare.yml` 再次读取本地文件哈希比对，任何篡改或缺失直接 fail closed。
+5. **严禁 Check Mode 写入**:
+   - 若处于 `--check` 模式，立即终止执行，防止任何代码产生非预期写入或网络副作用。
+6. **单主机执行作用域限制 (Single-Host Guard)**:
    - 检查 `ansible_play_hosts_all | length == 1`。严禁通过批处理或 `serial` 漏洞并发重装多台机器。
-4. **强校验认证参数**:
+7. **强校验认证参数**:
    - `os_reinstall_ssh_pubkey` 必须是非空合法公钥（正则校验 `ssh-ed25519` / `ssh-rsa` / `ecdsa` 等格式）。仅采用 SSH 公钥认证，不设默认密码。
 
 ---
 
-## 3. 上游脚本机制与踩坑经验
+## 3. 上游脚本机制与供应链边界
 
 本角色基于上游开源项目 `bin456789/reinstall` 实现：
 - **上游地址**:
-  - 国内加速源 (默认): `https://cnb.cool/bin456789/reinstall/-/git/raw/main/reinstall.sh`
-  - 国际官方源: `https://raw.githubusercontent.com/bin456789/reinstall/main/reinstall.sh`
+  - 国内加速源: `https://cnb.cool/bin456789/reinstall/-/git/raw/2252ca7615cd672dc1d9e67c52243db4ac859151/reinstall.sh`
+  - 国际官方源: `https://raw.githubusercontent.com/bin456789/reinstall/2252ca7615cd672dc1d9e67c52243db4ac859151/reinstall.sh`
 
-### 关键踩坑与技术经验
-1. **非交互式用户名 (Non-interactive Username)**:
-   - 上游脚本在未指定用户名时会触发交互式 `prompt_username` (`read -r -p`)。本角色通过传参 `--username root` 原生消除交互提示，杜绝 SSH 非交互执行时的 hang 挂起或 exit 报错。
-2. **两阶段安装与 SSH 误报 (Two-Stage Installer Environment)**:
-   - 目标机器重启后，首先清空硬盘进入内存中的 Debian installer 环境。
-   - **关键陷阱**：在此阶段 SSH 服务可能已率先开放，但此时 `/etc/os-release` 不存在，实际系统挂载在 `/target`。若探测脚本仅检查 SSH 端口通畅就判定“重装完成”，会产生严重误报。只有当 installer 写入完成并二次重启、正式系统启动且 `/etc/os-release` 存在时，重装才真正完成。
-3. **公钥与密码互斥**:
-   - 上游脚本 `--ssh-key` 与 `--password` 参数强互斥。本角色坚持 SSH 公钥单一认证规范，重装后密码默认为空并禁用密码登录。
-4. **网卡名称变迁与网络持久化风险**:
-   - 重装后内核与 udev 规则刷新，网卡接口名可能发生变更（如从腾讯云旧镜像的 `eth0` 变为 `ens5`）。
-   - 腾讯云 VPC 具有特殊网络拓扑（网关不在子网内、IPv4 私网 + 公网 /128 双栈绑定单网卡）。`bin456789/reinstall` 脚本会在 `/etc/network/interfaces` 中持久化写入静态路由与双栈网络。但运维人员在后续配置网络工具（如 Tailscale/WireGuard）时，必须注意网卡名变更。
-5. **SSH Host Key 变更与配置碎片**:
-   - 重装后目标主机的 SSH host key 会重新生成，控制端已知主机文件 `~/.ssh/known_hosts` 会触发指纹不匹配警告，连接时需清理旧指纹或使用 `StrictHostKeyChecking=accept-new`。
-   - 新系统自带标准的 `/etc/ssh/sshd_config.d/` 碎片目录，后续安全加固需检查碎片文件的覆盖情况。
-6. **安装后必须手动更新**:
-   - 上游脚本默认拉取官方最小 cloud 基础包，安装完毕后系统补丁未打齐，进入正式系统后需第一时间执行 `apt update && apt full-upgrade`。
+### 供应链信任边界与未审查资产说明
+- **第一阶段（本地已固定）**：引导脚本 `reinstall.sh` 本身已在代码库中严格锁定 commit 与 SHA256，具备防篡改校验。
+- **第二阶段（动态远端拉取）**：`reinstall.sh` 执行后，会在运行时动态从 Debian 官方镜像源下载 netboot 内核 (`vmlinuz`)、initrd 及网络配置包。该第二阶段资产未在代码库静态固化，依赖上游脚本逻辑和 Debian 官方镜像签名体系。操作员需明确知晓此供应链边界。
 
 ---
 
@@ -59,13 +57,15 @@
 
 | 变量名 | 默认值 | 描述 |
 | :--- | :--- | :--- |
-| `auroraops_roles.ops.os_reinstall` | `false` | 角色全局总开关。必须显式设为 `true`。 |
-| `os_reinstall_confirm` | `false` | 破坏性操作二次确认开关。必须显式设为 `true`。 |
+| `auroraops_roles.ops.os_reinstall` | `false` | 角色全局总开关。专属剧本中已内嵌开启。 |
+| `os_reinstall_confirm` | `false` | 破坏性操作确认开关。 |
+| `os_reinstall_backup_operator_ack` | `""` | **必须指定**，操作员备份确认声明，必须与当前目标主机名完全一致。 |
 | `os_reinstall_debian_version` | `"13"` | 目标 Debian 大版本，支持 `"12"` 或 `"13"`。 |
 | `os_reinstall_username` | `"root"` | 安装后默认管理员用户名。 |
 | `os_reinstall_ssh_port` | `22` | 重装后 SSH 监听端口。 |
 | `os_reinstall_ssh_pubkey` | `""` | **必须指定**，部署后写入 root authorized_keys 的公钥内容。 |
-| `os_reinstall_script_url` | `https://cnb.cool/...` | 下载重装脚本的 URL。海外节点可在 host_vars 覆盖为 GitHub 源。 |
+| `os_reinstall_script_commit` | `"2252ca..."` | 锁定的上游脚本 Commit SHA。 |
+| `os_reinstall_script_sha256` | `"84daf5..."` | 锁定的上游脚本 SHA256。 |
 | `os_reinstall_script_path` | `"/root/reinstall.sh"` | 目标机缓存脚本路径。 |
 | `os_reinstall_trigger_reboot` | `false` | 准备完成后是否由 Ansible 自动触发 `shutdown -r now`。 |
 
@@ -85,38 +85,28 @@
 
 ## 6. 使用与验证示例
 
-### 6.1 显式调用重装准备 (以 host_vars 为例)
-在临时执行变量或 `inventories/host_vars/<target-node>.yml` 中定义：
-```yaml
-auroraops_roles:
-  ops:
-    os_reinstall: true
-
-os_reinstall_confirm: true
-os_reinstall_ssh_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... ops@control"
-os_reinstall_trigger_reboot: false  # 建议由运维人员核对输出后手动重启
-```
-
-执行命令（必须指向专有生成的 ops deploy 剧本）：
+### 6.1 专属剧本调用重装准备
+必须使用专属入口剧本 `playbooks/ops/os_reinstall.yml`，且在交互式终端中运行：
 ```bash
-ansible-playbook -i inventories/prod.ini playbooks/ops/deploy.yml --limit <target-node> --tags os_reinstall
+ansible-playbook playbooks/ops/os_reinstall.yml -l <target-node> -e os_reinstall_backup_operator_ack='<target-node>' -e os_reinstall_ssh_pubkey='ssh-ed25519 AAAAC3...'
 ```
+执行期间终端将提示：
+```
+[CRITICAL WARNING] Bare-metal OS reinstallation will permanently destroy all data on '<target-node>'. To confirm, type the exact hostname:
+```
+必须准确输入 `<target-node>` 才能继续。非 TTY 或输入不匹配将立刻终止。
 
-### 6.2 安装后纯净化只读验证
-等待正式系统重启就绪后，执行独立验证剧本（内部绑定 `tasks_from: verify`）检查去监控效果：
+### 6.2 专属只读验证剧本
+等待系统重启进入正式 Debian 环境后，使用专属验证剧本：
 ```bash
-ansible-playbook -i inventories/prod.ini playbooks/ops/verify.yml --limit <target-node> --tags os_reinstall
+ansible-playbook playbooks/ops/verify_os_reinstall.yml -l <target-node>
 ```
-
-> [!WARNING]
-> **切勿在 deploy 剧本上执行 `--tags os_reinstall,verify`！**
-> Ansible 命令行中的多标签为逻辑 OR 关系。在 `playbooks/ops/deploy.yml` 上执行 `--tags os_reinstall,verify` 会命中所有带 `os_reinstall` 标签的任务，从而再次触发重装准备流程！
-> **只读验证必须严格且唯一通过专门生成的验证剧本 `playbooks/ops/verify.yml` 执行。**
+此剧本与任何 `deploy` 或普通 `verify` 完全解耦，无标签冲突或误触风险。
 
 验证清单覆盖：
 1. `/etc/os-release` 存在且解析出匹配的目标 `VERSION_ID`（如 `"13"` 或 `"12"`）；
 2. `/usr/local/qcloud`、`/usr/local/sa`、`/usr/local/agenttools` 物理目录均已消除；
 3. `pgrep -l -f '(tat_agent|barad|sgagent|yunjing)'` 无存活监控进程（返回码 1）；
-4. `dpkg-query -W -f='${binary:Package} ${db:Status-Status}\n'` 无任何处于 `installed` 状态的云监控包；
+4. `dpkg-query -W -f='${binary:Package} ${db:Status-Status}\n'` 以 clean rc=0 基础全量查询包状态，并通过正则严格断言无残留监控包；
 5. `systemctl list-unit-files` 无任何云监控残留 unit 文件（返回码 0 且输出为空）；
-6. `ip -brief addr show` 仅收集并记录已识别的网络接口名称，不打印具体地址结构且不宣称双栈通用支持。
+6. `ip -brief addr show` 仅收集并记录已识别的网络接口名称。

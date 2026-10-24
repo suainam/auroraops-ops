@@ -1,4 +1,7 @@
 ---
+- name: 强制执行安全断言与操作员交互确认 (Include safety guard)
+  ansible.builtin.include_tasks: assert_safety.yml
+
 - name: 发起目标主机重启进入系统安装环境
   ansible.builtin.command:
     argv:

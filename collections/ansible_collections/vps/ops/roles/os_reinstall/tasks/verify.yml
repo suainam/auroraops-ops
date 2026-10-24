@@ -5,7 +5,7 @@
 
 - name: 读取目标主机 /etc/os-release
   ansible.builtin.slurp:
-    path: /etc/os-release
+    path: "{{ os_reinstall_os_release_path | default('/etc/os-release') }}"
   register: os_reinstall_os_release_raw
   tags: [verify, ops, os_reinstall, phase6]
 
@@ -61,19 +61,14 @@
     quiet: true
   tags: [verify, ops, os_reinstall, phase6]
 
-- name: 检查已安装 dpkg 包中是否存在云厂商监控包
+- name: 检查已安装 dpkg 包中是否存在云厂商监控包 (dpkg 查全包状态，rc 必须为 0)
   ansible.builtin.command:
     argv:
       - "dpkg-query"
       - "-W"
       - "-f=${binary:Package} ${db:Status-Status}\n"
-      - "tat_agent*"
-      - "barad*"
-      - "sgagent*"
-      - "qcloud*"
-      - "yunjing*"
   register: os_reinstall_dpkg_check
-  failed_when: false
+  failed_when: os_reinstall_dpkg_check.rc != 0
   changed_when: false
   tags: [verify, ops, os_reinstall, phase6]
 
@@ -83,7 +78,7 @@
       {{
         os_reinstall_dpkg_check.stdout_lines
         | default([])
-        | select('regex', ' installed$')
+        | select('regex', '^(tat_agent|barad|sgagent|qcloud|yunjing)[^ ]* installed$')
         | list
       }}
   ansible.builtin.assert:
@@ -93,7 +88,6 @@
       检测到云厂商监控 dpkg 包处于安装状态: {{ installed_vendor_pkgs }}
     quiet: true
   tags: [verify, ops, os_reinstall, phase6]
-
 - name: 检查 systemd 是否存在云监控残留 unit 文件
   ansible.builtin.command:
     argv: ["systemctl", "list-unit-files", "--no-legend", "tat*", "barad*", "sgagent*", "qcloud*", "yunjing*"]

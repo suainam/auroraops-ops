@@ -1,8 +1,12 @@
 ---
-- name: 下载 bin456789/reinstall.sh 重装脚本
+- name: 强制执行安全断言与操作员交互确认 (Include safety guard)
+  ansible.builtin.include_tasks: assert_safety.yml
+
+- name: 下载固定版本 bin456789/reinstall.sh 重装脚本并校验 SHA256
   ansible.builtin.get_url:
     url: "{{ os_reinstall_script_url }}"
     dest: "{{ os_reinstall_script_path }}"
+    checksum: "sha256:{{ os_reinstall_script_sha256 }}"
     mode: "0755"
     timeout: 30
   tags: [deploy, ops, os_reinstall, phase6]

@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""Bounded Spool Manager for auroraops-monitor.
+
+Guarantees:
+- Single writer lock (fcntl.flock).
+- Bounded spool capacity (50MB default).
+- Zero active file truncation (rename-based roll).
+- Backpressure fail-closed when capacity exceeded with un-ACKed files (never delete un-ACKed records).
+- Secure ACK handshake to remove only verified sealed files.
+"""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import json
+import os
+import re
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+DEFAULT_BASE_DIR = Path("/data/home/auroraops-monitor")
+DEFAULT_MAX_BYTES = 50 * 1024 * 1024  # 50MB
+SEALED_FILENAME_RE = re.compile(r"^spool-[0-9A-Za-z_\-]+(\.[a-zA-Z0-9]+)?\.jsonl$")
+
+
+class BoundedSpool:
+    def __init__(self, base_dir: Path | None = None, max_bytes: int | None = None) -> None:
+        self.base_dir = base_dir or Path(os.environ.get("AURORAOPS_SPOOL_DIR", DEFAULT_BASE_DIR))
+        self.spool_dir = self.base_dir / "spool"
+        self.active_file = self.base_dir / "spool.jsonl"
+        self.lock_file = self.base_dir / "spool.lock"
+        self.max_bytes = max_bytes or int(os.environ.get("AURORAOPS_SPOOL_MAX_BYTES", DEFAULT_MAX_BYTES))
+
+    def ensure_dirs(self) -> None:
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self.spool_dir.mkdir(parents=True, exist_ok=True)
+
+    def _acquire_lock(self):
+        self.ensure_dirs()
+        lock_fd = open(self.lock_file, "a+")
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+        return lock_fd
+
+    def _release_lock(self, lock_fd) -> None:
+        try:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+            lock_fd.close()
+        except Exception:
+            pass
+
+    def get_total_spool_bytes(self) -> int:
+        total = 0
+        if self.active_file.exists():
+            total += self.active_file.stat().st_size
+        if self.spool_dir.exists():
+            for f in self.spool_dir.iterdir():
+                if f.is_file():
+                    total += f.stat().st_size
+        return total
+
+    def append_record(self, record: dict | str) -> dict:
+        lock_fd = self._acquire_lock()
+        try:
+            if isinstance(record, dict):
+                line = json.dumps(record, ensure_ascii=False) + "\n"
+            else:
+                line = record.strip() + "\n"
+                # Validate JSON format
+                json.loads(line)
+
+            line_bytes = line.encode("utf-8")
+            line_len = len(line_bytes)
+
+            total_bytes = self.get_total_spool_bytes()
+            if total_bytes + line_len > self.max_bytes:
+                # Backpressure: fail closed, refuse write, never delete un-ACKed data
+                raise RuntimeError(
+                    f"Spool capacity exceeded ({total_bytes} + {line_len} > {self.max_bytes} bytes). "
+                    "Backpressure activated: write rejected until un-ACKed records are pulled and ACKed."
+                )
+
+            active_size = self.active_file.stat().st_size if self.active_file.exists() else 0
+            # If single active file exceeds max_bytes / 2 or 10MB, roll it
+            roll_threshold = min(self.max_bytes // 2, 10 * 1024 * 1024)
+            if active_size > 0 and (active_size + line_len > roll_threshold):
+                self._roll_active_locked()
+
+            # Append to active file
+            with open(self.active_file, "a", encoding="utf-8") as f:
+                f.write(line)
+                f.flush()
+                os.fsync(f.fileno())
+
+            return {
+                "status": "appended",
+                "active_size": self.active_file.stat().st_size,
+                "total_bytes": self.get_total_spool_bytes(),
+            }
+        finally:
+            self._release_lock(lock_fd)
+
+    def _roll_active_locked(self) -> Path | None:
+        if not self.active_file.exists() or self.active_file.stat().st_size == 0:
+            return None
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        sealed_name = f"spool-{ts}.jsonl"
+        target = self.spool_dir / sealed_name
+        # Collision avoidance
+        counter = 1
+        while target.exists():
+            target = self.spool_dir / f"spool-{ts}_{counter}.jsonl"
+            counter += 1
+        self.active_file.rename(target)
+        return target
+
+    def seal_active(self) -> dict:
+        lock_fd = self._acquire_lock()
+        try:
+            sealed = self._roll_active_locked()
+            return {
+                "status": "sealed" if sealed else "empty",
+                "sealed_path": str(sealed) if sealed else None,
+                "sealed_filename": sealed.name if sealed else None,
+            }
+        finally:
+            self._release_lock(lock_fd)
+
+    def list_unacked_files(self) -> list[dict]:
+        self.ensure_dirs()
+        result = []
+        if self.spool_dir.exists():
+            for f in sorted(self.spool_dir.iterdir()):
+                if f.is_file() and f.name.endswith(".jsonl"):
+                    result.append({
+                        "filename": f.name,
+                        "path": str(f),
+                        "size_bytes": f.stat().st_size,
+                        "mtime_utc": datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc).isoformat(),
+                    })
+        return result
+
+    def ack_file(self, filename: str) -> dict:
+        # Strictly validate filename against path traversal
+        clean_name = os.path.basename(filename)
+        if not SEALED_FILENAME_RE.match(clean_name):
+            raise ValueError(f"Invalid sealed filename format: '{clean_name}'")
+
+        target = self.spool_dir / clean_name
+        lock_fd = self._acquire_lock()
+        try:
+            if not target.exists():
+                return {"status": "not_found", "filename": clean_name}
+            if not target.is_file():
+                raise ValueError("Target is not a regular file")
+            # Delete only after explicit ACK
+            target.unlink()
+            return {"status": "acked_and_removed", "filename": clean_name}
+        finally:
+            self._release_lock(lock_fd)
+
+    def get_status(self) -> dict:
+        self.ensure_dirs()
+        active_size = self.active_file.stat().st_size if self.active_file.exists() else 0
+        unacked = self.list_unacked_files()
+        sealed_size = sum(u["size_bytes"] for u in unacked)
+        return {
+            "base_dir": str(self.base_dir),
+            "active_file_exists": self.active_file.exists(),
+            "active_size_bytes": active_size,
+            "unacked_sealed_files": unacked,
+            "sealed_total_bytes": sealed_size,
+            "total_spool_bytes": active_size + sealed_size,
+            "max_capacity_bytes": self.max_bytes,
+            "capacity_usage_pct": round(((active_size + sealed_size) / self.max_bytes) * 100, 2),
+        }
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Bounded Spool Manager")
+    parser.add_argument("--base-dir", type=Path, default=None)
+    parser.add_argument("--max-bytes", type=int, default=None)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    append_p = sub.add_parser("append")
+    append_p.add_argument("--json", dest="json_str", default=None, help="JSON record string")
+
+    sub.add_parser("seal")
+    sub.add_parser("list")
+    sub.add_parser("status")
+
+    ack_p = sub.add_parser("ack")
+    ack_p.add_argument("filename", help="Sealed spool filename to ACK")
+
+    args = parser.parse_args()
+    spool = BoundedSpool(base_dir=args.base_dir, max_bytes=args.max_bytes)
+
+    if args.command == "append":
+        raw = args.json_str
+        if raw is None:
+            raw = sys.stdin.read()
+        res = spool.append_record(raw)
+        print(json.dumps(res, indent=2))
+    elif args.command == "seal":
+        res = spool.seal_active()
+        print(json.dumps(res, indent=2))
+    elif args.command == "list":
+        res = spool.list_unacked_files()
+        print(json.dumps(res, indent=2))
+    elif args.command == "ack":
+        res = spool.ack_file(args.filename)
+        print(json.dumps(res, indent=2))
+    elif args.command == "status":
+        res = spool.get_status()
+        print(json.dumps(res, indent=2))
+
+
+if __name__ == "__main__":
+    main()

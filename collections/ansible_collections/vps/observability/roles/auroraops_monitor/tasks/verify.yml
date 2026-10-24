@@ -1,0 +1,98 @@
+---
+# Stage 5: Verify (Active Assertions)
+# Performs read-only programmatic assertions against live deployment.
+
+- name: 验证 Baseline Fact 存在
+  become: true
+  ansible.builtin.stat:
+    path: "{{ auroraops_monitor_fact_path }}"
+  register: auroraops_monitor_verify_fact
+  tags: [verify, observability, auroraops_monitor]
+
+- name: 断言 Baseline Fact 文件存在
+  ansible.builtin.assert:
+    that:
+      - auroraops_monitor_verify_fact.stat.exists
+    fail_msg: "auroraops_monitor baseline fact 文件不存在"
+  tags: [verify, observability, auroraops_monitor]
+
+- name: 读取 Baseline Fact
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ auroraops_monitor_fact_path }}"
+  register: auroraops_monitor_fact_raw
+  tags: [verify, observability, auroraops_monitor]
+
+- name: 断言 Baseline Fact 元数据合规
+  ansible.builtin.assert:
+    that:
+      - (auroraops_monitor_fact_raw.content | b64decode | from_json).auroraops_managed | bool
+      - (auroraops_monitor_fact_raw.content | b64decode | from_json).managed_dir == auroraops_monitor_dir
+    fail_msg: "auroraops_monitor baseline fact 元数据不符合契约规范"
+  tags: [verify, observability, auroraops_monitor]
+
+- name: 验证工作目录与核心脚本存在
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: auroraops_monitor_verify_stats
+  loop:
+    - "{{ auroraops_monitor_dir }}"
+    - "{{ auroraops_monitor_spool_dir }}"
+    - "{{ auroraops_monitor_dir }}/spool_manager.py"
+    - "{{ auroraops_monitor_dir }}/auroraops_probe.py"
+  tags: [verify, observability, auroraops_monitor]
+
+- name: 断言目录与脚本均存在
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+    fail_msg: "关键监控资产不存在: {{ item.item }}"
+  loop: "{{ auroraops_monitor_verify_stats.results }}"
+  tags: [verify, observability, auroraops_monitor]
+
+- name: 验证 spool.jsonl 文件与容量上限
+  become: true
+  ansible.builtin.stat:
+    path: "{{ auroraops_monitor_spool_file }}"
+  register: auroraops_monitor_spool_stat
+  tags: [verify, observability, auroraops_monitor]
+
+- name: 断言 spool.jsonl 存在且大小在 50MB 阈值内
+  ansible.builtin.assert:
+    that:
+      - auroraops_monitor_spool_stat.stat.exists
+      - auroraops_monitor_spool_stat.stat.size <= (auroraops_monitor_max_spool_bytes | int)
+    fail_msg: "spool.jsonl 文件不存在或超过 50MB 容量限制"
+  tags: [verify, observability, auroraops_monitor]
+
+- name: 执行远端 Spool 行内容与 JSON Schema 严格校验
+  become: true
+  become_user: "{{ auroraops_monitor_user }}"
+  ansible.builtin.command:
+    cmd: >-
+      python3 -c "
+      import json, sys
+      with open('{{ auroraops_monitor_spool_file }}', 'r', encoding='utf-8') as f:
+          lines = [line.strip() for line in f if line.strip()]
+      if not lines:
+          print('empty spool')
+          sys.exit(1)
+      for idx, line in enumerate(lines):
+          data = json.loads(line)
+          required = ['run_id', 'start_time_utc', 'overall_status', 'google', 'youtube', 'reachability']
+          missing = [k for k in required if k not in data]
+          if missing:
+              print(f'line {idx} missing keys: {missing}')
+              sys.exit(2)
+      print(f'validated {len(lines)} records successfully')
+      "
+  register: auroraops_monitor_schema_val
+  changed_when: false
+  failed_when: auroraops_monitor_schema_val.rc != 0
+  tags: [verify, observability, auroraops_monitor]
+
+- name: 验证结果摘要
+  ansible.builtin.debug:
+    msg: "Verify SUCCESS: Fact present, spool size={{ auroraops_monitor_spool_stat.stat.size }}B, records={{ auroraops_monitor_schema_val.stdout }}"
+  tags: [verify, observability, auroraops_monitor]

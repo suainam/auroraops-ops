@@ -1,0 +1,74 @@
+---
+# Stage 4: Deploy / Apply
+# Persists baseline fact, creates directory, deploys scripts, and initializes spool.
+
+- name: 确保 facts.d 目录存在
+  become: true
+  ansible.builtin.file:
+    path: /etc/ansible/facts.d
+    state: directory
+    mode: "0755"
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 固化部署前 Baseline Fact 事实
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ auroraops_monitor_fact_path }}"
+    mode: "0644"
+    content: |
+      {{
+        {
+          "auroraops_managed": true,
+          "version": 1,
+          "managed_dir": auroraops_monitor_dir,
+          "pre_deploy_dir_exists": auroraops_monitor_pre_deploy_dir_exists | default(false),
+          "max_spool_bytes": auroraops_monitor_max_spool_bytes | default(52428800)
+        } | to_nice_json
+      }}
+  when: not (auroraops_monitor_baseline_exists | default(false))
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 创建监控工作目录与 spool 目录
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ auroraops_monitor_user }}"
+    group: "{{ auroraops_monitor_group }}"
+    mode: "0755"
+  loop:
+    - "{{ auroraops_monitor_dir }}"
+    - "{{ auroraops_monitor_spool_dir }}"
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 spool_manager.py 管理器
+  become: true
+  ansible.builtin.copy:
+    src: spool_manager.py
+    dest: "{{ auroraops_monitor_dir }}/spool_manager.py"
+    owner: "{{ auroraops_monitor_user }}"
+    group: "{{ auroraops_monitor_group }}"
+    mode: "0755"
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 部署 auroraops_probe.py 探针程序
+  become: true
+  ansible.builtin.copy:
+    src: auroraops_probe.py
+    dest: "{{ auroraops_monitor_dir }}/auroraops_probe.py"
+    owner: "{{ auroraops_monitor_user }}"
+    group: "{{ auroraops_monitor_group }}"
+    mode: "0755"
+  tags: [deploy, observability, auroraops_monitor]
+
+- name: 初始化探针并生成首条 Bounded Spool 记录 (若 spool.jsonl 尚不存在)
+  become: true
+  become_user: "{{ auroraops_monitor_user }}"
+  ansible.builtin.command:
+    cmd: "python3 {{ auroraops_monitor_dir }}/auroraops_probe.py"
+  register: auroraops_monitor_init_run
+  changed_when: true
+  when:
+    - not ansible_check_mode
+    - not (auroraops_monitor_preflight_dir_stat.stat.exists | default(false))
+  tags: [deploy, observability, auroraops_monitor]

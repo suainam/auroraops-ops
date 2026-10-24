@@ -1,0 +1,50 @@
+---
+# Stage 7: Rollback (Fault Simulation & Reversal)
+# Restores host to exact pre-deployment state.
+
+- name: 检查 Baseline Fact 是否存在
+  become: true
+  ansible.builtin.stat:
+    path: "{{ auroraops_monitor_fact_path }}"
+  register: auroraops_monitor_rollback_fact_stat
+  tags: [rollback, observability, auroraops_monitor]
+
+- name: 读取 Baseline Fact 以供回滚
+  become: true
+  ansible.builtin.slurp:
+    path: "{{ auroraops_monitor_fact_path }}"
+  register: auroraops_monitor_rollback_fact_raw
+  when: auroraops_monitor_rollback_fact_stat.stat.exists
+  tags: [rollback, observability, auroraops_monitor]
+
+- name: 解析 Baseline Fact
+  ansible.builtin.set_fact:
+    auroraops_monitor_baseline: "{{ auroraops_monitor_rollback_fact_raw.content | b64decode | from_json }}"
+  when: auroraops_monitor_rollback_fact_stat.stat.exists
+  tags: [rollback, observability, auroraops_monitor]
+
+- name: 安全护栏 — 验证待清理路径严格受限
+  ansible.builtin.assert:
+    that:
+      - auroraops_monitor_dir == '/data/home/auroraops-monitor'
+      - auroraops_monitor_dir is match('^/data/home/[a-zA-Z0-9_\-]+$')
+    fail_msg: "拒绝回滚: auroraops_monitor_dir 路径不符合严格白名单，防止破坏上级或系统目录"
+  tags: [rollback, observability, auroraops_monitor]
+
+- name: 清理 auroraops-monitor 部署目录 (当且仅当部署前不存在)
+  become: true
+  ansible.builtin.file:
+    path: "{{ auroraops_monitor_dir }}"
+    state: absent
+  when:
+    - auroraops_monitor_rollback_fact_stat.stat.exists
+    - not (auroraops_monitor_baseline.pre_deploy_dir_exists | default(false) | bool)
+  tags: [rollback, observability, auroraops_monitor]
+
+- name: 清理 Baseline Fact 记录
+  become: true
+  ansible.builtin.file:
+    path: "{{ auroraops_monitor_fact_path }}"
+    state: absent
+  when: auroraops_monitor_rollback_fact_stat.stat.exists
+  tags: [rollback, observability, auroraops_monitor]

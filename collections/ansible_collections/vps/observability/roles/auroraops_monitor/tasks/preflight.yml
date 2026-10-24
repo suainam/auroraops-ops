@@ -1,0 +1,51 @@
+---
+# Stage 1: Preflight (Read-Only)
+# Probes host readiness, filesystem prerequisites, and existing baseline facts.
+
+- name: 探测 Python 解释器可用性
+  ansible.builtin.command:
+    cmd: python3 -c 'import json, fcntl, urllib.request, socket, ssl; print("OK")'
+  register: auroraops_monitor_preflight_py
+  changed_when: false
+  failed_when: auroraops_monitor_preflight_py.rc != 0
+  tags: [deploy, check, preflight, verify, observability, auroraops_monitor]
+
+- name: 探测 /data/home 挂载点与目录可达性
+  become: true
+  ansible.builtin.stat:
+    path: /data/home
+  register: auroraops_monitor_preflight_data_home
+  tags: [deploy, check, preflight, verify, observability, auroraops_monitor]
+
+- name: 断言 /data/home 存在且为目录
+  ansible.builtin.assert:
+    that:
+      - auroraops_monitor_preflight_data_home.stat.exists
+      - auroraops_monitor_preflight_data_home.stat.isdir
+    fail_msg: "/data/home 不存在或不是目录，Instabox 挂载异常"
+  tags: [deploy, check, preflight, verify, observability, auroraops_monitor]
+
+- name: 检查现有 auroraops_monitor 基线事实
+  become: true
+  ansible.builtin.stat:
+    path: "{{ auroraops_monitor_fact_path }}"
+  register: auroraops_monitor_preflight_fact_stat
+  tags: [deploy, check, preflight, verify, observability, auroraops_monitor]
+
+- name: 检查现有监控工作目录状态
+  become: true
+  ansible.builtin.stat:
+    path: "{{ auroraops_monitor_dir }}"
+  register: auroraops_monitor_preflight_dir_stat
+  tags: [deploy, check, preflight, verify, observability, auroraops_monitor]
+
+- name: 设置 preflight 事实摘要
+  ansible.builtin.set_fact:
+    auroraops_monitor_pre_deploy_dir_exists: "{{ auroraops_monitor_preflight_dir_stat.stat.exists | default(false) }}"
+    auroraops_monitor_baseline_exists: "{{ auroraops_monitor_preflight_fact_stat.stat.exists | default(false) }}"
+  tags: [deploy, check, preflight, verify, observability, auroraops_monitor]
+
+- name: Preflight 摘要输出
+  ansible.builtin.debug:
+    msg: "Preflight OK: Python3=yes, /data/home=yes, dir_exists={{ auroraops_monitor_pre_deploy_dir_exists }}, baseline_exists={{ auroraops_monitor_baseline_exists }}"
+  tags: [deploy, check, preflight, verify, observability, auroraops_monitor]

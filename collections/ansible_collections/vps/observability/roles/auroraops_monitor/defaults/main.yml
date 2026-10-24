@@ -1,0 +1,12 @@
+---
+# auroraops_monitor default variables
+auroraops_monitor_enabled: true
+auroraops_monitor_dir: /data/home/auroraops-monitor
+auroraops_monitor_spool_dir: /data/home/auroraops-monitor/spool
+auroraops_monitor_spool_file: /data/home/auroraops-monitor/spool.jsonl
+auroraops_monitor_lock_file: /data/home/auroraops-monitor/spool.lock
+auroraops_monitor_fact_path: /etc/ansible/facts.d/auroraops_monitor.fact
+auroraops_monitor_max_spool_bytes: 52428800  # 50MB
+auroraops_monitor_user: user
+auroraops_monitor_group: user
+auroraops_monitor_probe_hosts: "1.1.1.1 8.8.8.8"

@@ -1,0 +1,66 @@
+---
+# Stage 8: Rollback Verify (Old-State Audit)
+# Independently asserts host reverted to pre-deployment baseline.
+
+- name: 验证 Baseline Fact 已被清除
+  become: true
+  ansible.builtin.stat:
+    path: "{{ auroraops_monitor_fact_path }}"
+  register: auroraops_monitor_post_rb_fact
+  tags: [rollback_verify, observability, auroraops_monitor]
+
+- name: 断言 Baseline Fact 确实不存在
+  ansible.builtin.assert:
+    that:
+      - not auroraops_monitor_post_rb_fact.stat.exists
+    fail_msg: "回滚失败: {{ auroraops_monitor_fact_path }} 仍然残留"
+  tags: [rollback_verify, observability, auroraops_monitor]
+
+- name: 验证监控目录已安全清除
+  become: true
+  ansible.builtin.stat:
+    path: "{{ auroraops_monitor_dir }}"
+  register: auroraops_monitor_post_rb_dir
+  tags: [rollback_verify, observability, auroraops_monitor]
+
+- name: 断言监控目录已不存在
+  ansible.builtin.assert:
+    that:
+      - not auroraops_monitor_post_rb_dir.stat.exists
+    fail_msg: "回滚失败: {{ auroraops_monitor_dir }} 仍然残留"
+  tags: [rollback_verify, observability, auroraops_monitor]
+
+- name: 验证宿主机保护资产完好无损 (/data/home 与预置目录)
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: auroraops_monitor_protected_stats
+  loop:
+    - /data
+    - /data/home
+    - /data/config
+    - /data/workspace
+    - /data/state
+  tags: [rollback_verify, observability, auroraops_monitor]
+
+- name: 断言受保护预置目录完整保留
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isdir
+    fail_msg: "回滚破坏了受保护预置目录: {{ item.item }}"
+  loop: "{{ auroraops_monitor_protected_stats.results }}"
+  tags: [rollback_verify, observability, auroraops_monitor]
+
+- name: 检查无孤儿残留进程
+  ansible.builtin.command:
+    cmd: "pgrep -f 'auroraops_probe.py|spool_manager.py'"
+  register: auroraops_monitor_orphan_proc
+  changed_when: false
+  failed_when: auroraops_monitor_orphan_proc.rc == 0
+  tags: [rollback_verify, observability, auroraops_monitor]
+
+- name: 回滚验证终态合规输出
+  ansible.builtin.debug:
+    msg: "Rollback Verify PASSED: Zero orphan processes, monitor dir absent, /data assets intact."
+  tags: [rollback_verify, observability, auroraops_monitor]

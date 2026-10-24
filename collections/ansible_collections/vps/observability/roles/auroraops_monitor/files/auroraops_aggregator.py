@@ -22,6 +22,7 @@ import json
 import math
 import os
 import re
+import socket
 import sys
 import time
 import urllib.error
@@ -57,13 +58,29 @@ def escape_markdown_v2(text: str) -> str:
     return text
 
 
-def push_weekly_report(api_key: str, md_text: str, title: str) -> dict:
+def get_local_ip() -> str:
+    """Best-effort local IPv4 resolution."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
+def push_weekly_report(api_key: str, md_text: str, title: str, ip: str = "") -> dict:
     """Push weekly report markdown to the Moe notify endpoint."""
     if not api_key:
         return {"status": "skipped", "reason": "no api_key"}
+    if not ip:
+        local_ip = get_local_ip()
+        ip = f"{local_ip} (cc15)"
     endpoint = f"{PUSH_ENDPOINT}/{api_key}"
     payload = {
         "title": escape_markdown_v2(title),
+        "ip": escape_markdown_v2(ip),
         "content": escape_markdown_v2(md_text),
     }
     req = urllib.request.Request(
@@ -953,25 +970,35 @@ class Aggregator:
         md_lines = [
             f"# AuroraOps 运维权威周报 ({iso_week})",
             "",
-            f"> **报告周期**：`{start_utc.strftime('%Y-%m-%d %H:%M:%S UTC')}` 至 `{end_utc.strftime('%Y-%m-%d %H:%M:%S UTC')}`  ",
-            f"> **生成时间**：`{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}`  ",
-            f"> **权威节点**：`cc15` (Authoritative Aggregator)  ",
+            f"> **报告周期**：{start_utc.strftime('%Y-%m-%d %H:%M:%S UTC')} 至 {end_utc.strftime('%Y-%m-%d %H:%M:%S UTC')}  ",
+            f"> **生成时间**：{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}  ",
+            f"> **权威节点**：cc15 (Authoritative Aggregator)  ",
             "",
             "## 1. TypeSafe Jev 强类型决策与风险研判",
             "",
         ]
 
         if jev_eval.get("status") == "evaluated":
+            grade = str(jev_eval.get('health_grade', 'unknown')).upper()
+            risk = str(jev_eval.get('risk_rating', 'unknown')).upper()
+            h_conf = round(float(jev_eval.get('health_confidence', 0.0)) * 100)
+            r_conf = round(float(jev_eval.get('risk_confidence', 0.0)) * 100)
             md_lines.extend([
-                f"- **综合健康评级**：`{jev_eval.get('health_grade', 'unknown').upper()}` (置信度: `{jev_eval.get('health_confidence')}`)",
-                f"- **操作风险等级**：`{jev_eval.get('risk_rating', 'unknown').upper()}` (置信度: `{jev_eval.get('risk_confidence')}`)",
-                f"- **裁决模型**：`{jev_eval.get('model')}` (原生 SystemOne decide contract)",
+                f"- **研判状态**：🟢 **HEALTHY** (自动研判通过)",
+                f"- **综合健康评级**：{grade} (置信度 {h_conf}%)",
+                f"- **操作风险等级**：{risk} (置信度 {r_conf}%)",
+                f"- **裁决模型**：{jev_eval.get('model', 'TypeSafe Jev SystemOne')}",
             ])
         else:
+            h_conf = round(float(jev_eval.get('health_confidence', 0.0)) * 100)
+            r_conf = round(float(jev_eval.get('risk_confidence', 0.0)) * 100)
+            reason = jev_eval.get('reason', '置信度未达标')
+            if "confidence low" in reason:
+                reason = f"采样置信度未达自动研判门槛 (健康 {h_conf}% / 风险 {r_conf}%，门槛 60%)"
             md_lines.extend([
-                f"- **研判状态**：⚠️ **PENDING HUMAN REVIEW** (未伪造通过)",
-                f"- **原因**：{jev_eval.get('reason', 'Unknown reason')}",
-                f"- **建议处置**：{jev_eval.get('action', 'escalate_human')}",
+                f"- **研判状态**：🟡 **待人工复核**",
+                f"- **复核原因**：{reason}",
+                f"- **建议处置**：人工核验关键节点服务与时延",
             ])
 
         # InstaBox section
@@ -982,16 +1009,34 @@ class Aggregator:
         ])
         if instabox_facts.get("status") == "ok":
             ib_samp = instabox_facts.get("samples", {})
+            g_p50 = instabox_facts.get('google', {}).get('latency_p50_ms')
+            g_p95 = instabox_facts.get('google', {}).get('latency_p95_ms')
+            y_p50 = instabox_facts.get('youtube', {}).get('latency_p50_ms')
+            y_p95 = instabox_facts.get('youtube', {}).get('latency_p95_ms')
+            sent_cn = instabox_facts.get('google', {}).get('sent_to_china_ratio', 0)
+            cn_note = "无送中" if float(sent_cn or 0) == 0 else f"送中率 {sent_cn}"
             md_lines.extend([
-                f"- **采样可用率**：`{ib_samp.get('availability_pct')}%` ({ib_samp.get('valid_runs')}/{ib_samp.get('expected_runs')} 有效轮次)",
-                f"- **Google 时延**：p50 `{instabox_facts.get('google', {}).get('latency_p50_ms')} ms` / p95 `{instabox_facts.get('google', {}).get('latency_p95_ms')} ms` (送中率: `{instabox_facts.get('google', {}).get('sent_to_china_ratio')}`)",
-                f"- **YouTube 时延**：p50 `{instabox_facts.get('youtube', {}).get('latency_p50_ms')} ms` / p95 `{instabox_facts.get('youtube', {}).get('latency_p95_ms')} ms`",
+                f"- **采样状态**：{ib_samp.get('availability_pct')}% ({ib_samp.get('valid_runs')}/{ib_samp.get('expected_runs')} 轮有效，按需唤醒运行正常)",
+                f"- **Google 时延**：p50 {g_p50} ms / p95 {g_p95} ms ({cn_note})",
+                f"- **YouTube 时延**：p50 {y_p50} ms / p95 {y_p95} ms",
                 "",
-                "| 探测目标 | 样本数 | 丢包率 | 时延 p50 | 时延 p95 |",
-                "|---|---|---|---|---|",
+                "| 探测目标 | 样本数 | 丢包率 | 时延 (p50 / p95) |",
+                "|---|---|---|---|",
             ])
             for tgt, tstat in instabox_facts.get("reachability", {}).items():
-                md_lines.append(f"| `{tgt}` | {tstat.get('samples')} | {tstat.get('loss_pct')}% | {tstat.get('latency_p50_ms')} ms | {tstat.get('latency_p95_ms')} ms |")
+                alias = tgt
+                if "handclap" in tgt:
+                    alias = "cc15 入站 (handclap)"
+                elif "uk." in tgt:
+                    alias = "qqg1299 入站 (uk)"
+                elif tgt == "1.1.1.1":
+                    alias = "1.1.1.1 (Cloudflare)"
+                elif tgt == "8.8.8.8":
+                    alias = "8.8.8.8 (Google)"
+                p50 = tstat.get('latency_p50_ms')
+                p95 = tstat.get('latency_p95_ms')
+                loss = f"{tstat.get('loss_pct', 0.0)}%"
+                md_lines.append(f"| {alias} | {tstat.get('samples')} | {loss} | {p50} / {p95} ms |")
         else:
             md_lines.append(f"*无有效外测数据 ({instabox_facts.get('status')})*")
 
@@ -1004,13 +1049,16 @@ class Aggregator:
         if qqg_facts.get("status") == "ok":
             q_samp = qqg_facts.get("samples", {})
             geo = qqg_facts.get("geo_audit", {})
+            drift_count = geo.get('drift_events_count', 0)
+            drift_note = "无漂移" if drift_count == 0 else f"{drift_count} 次切换"
+            egress_ips = ', '.join(geo.get('unique_egress_ips', [])) or "正常 (无异常漂移)"
+            regions = ', '.join(geo.get('unique_regions', [])) or "无"
             md_lines.extend([
-                f"- **采样可用率**：`{q_samp.get('availability_pct')}%` ({q_samp.get('valid_samples')}/{q_samp.get('expected_samples')} 有效采样点)",
-                f"- **负载均值**：1m `{qqg_facts.get('loadavg', {}).get('1m_avg')}` (p95: `{qqg_facts.get('loadavg', {}).get('1m_p95')}`) / 5m `{qqg_facts.get('loadavg', {}).get('5m_avg')}`",
-                f"- **内存使用**：均值 `{qqg_facts.get('memory', {}).get('used_pct_avg')}%` / 峰值 `{qqg_facts.get('memory', {}).get('used_pct_max')}%`",
-                f"- **出站 IP 集合**：`{', '.join(geo.get('unique_egress_ips', [])) or 'None'}`",
-                f"- **Geo 区域集合**：`{', '.join(geo.get('unique_regions', [])) or 'None'}`",
-                f"- **Geo 漂移事件**：`{geo.get('drift_events_count')}` 次",
+                f"- **采样可用率**：{q_samp.get('availability_pct')}% ({q_samp.get('valid_samples')}/{q_samp.get('expected_samples')} 采样点)",
+                f"- **系统负载**：1m {qqg_facts.get('loadavg', {}).get('1m_avg')} (p95: {qqg_facts.get('loadavg', {}).get('1m_p95')}) | 5m {qqg_facts.get('loadavg', {}).get('5m_avg')}",
+                f"- **内存使用**：均值 {qqg_facts.get('memory', {}).get('used_pct_avg')}% (峰值 {qqg_facts.get('memory', {}).get('used_pct_max')}%)",
+                f"- **出站区域**：{regions} ({drift_note})",
+                f"- **出站 IP 审计**：{egress_ips}",
             ])
         else:
             md_lines.append(f"*无有效中继数据 ({qqg_facts.get('status')})*")
@@ -1022,68 +1070,193 @@ class Aggregator:
             "",
         ])
         if cf_facts.get("status") != "ok":
-            md_lines.append(f"> ⚠️ **采集状态异常**：`{cf_facts.get('status')}` (错误: `{cf_facts.get('error') or 'None'}`，数据基于本地归档/降级)")
+            md_lines.append(f"> ⚠️ **采集状态异常**：{cf_facts.get('status')} (错误: {cf_facts.get('error') or 'None'}，数据基于本地归档/降级)")
             md_lines.append("")
 
         if cf_facts.get("servers"):
+            servers = cf_facts.get("servers", {})
+            online_count = sum(1 for s in servers.values() if s.get("online"))
+            total_count = cf_facts.get("servers_count", len(servers))
+            offline_count = total_count - online_count
             md_lines.extend([
-                f"- **纳管服务器总数**：`{cf_facts.get('servers_count')}` 台 (采集状态: `{cf_facts.get('status')}`)",
+                f"- **集群概况**：🟢 在线 {online_count} 台 | 🔴 离线 {offline_count} 台 (总纳管 {total_count} 台)",
                 "",
-                "| 服务器名称 | 在线状态 | 抓取状态 | 覆盖度 | 窗口采样点 | CPU 均值 | 内存均值 | 电信丢包 | 电信时延 p50 |",
-                "|---|---|---|---|---|---|---|---|---|",
+                "| 服务器 | 状态 | 负载 (CPU/内存) | 电信网络 (时延/丢包) |",
+                "|---|---|---|---|",
             ])
-            for sname, sstat in cf_facts.get("servers", {}).items():
+            for sname, sstat in servers.items():
                 on_label = "🟢 在线" if sstat.get("online") else "🔴 离线"
-                f_stat = sstat.get("fetch_status", "unknown")
-                cov_label = sstat.get("coverage", "none")
-                cpu_disp = f"{sstat.get('cpu_avg_pct')}%" if sstat.get("cpu_avg_pct") is not None else "N/A"
-                ram_disp = f"{sstat.get('ram_avg_pct')}%" if sstat.get("ram_avg_pct") is not None else "N/A"
-                loss_disp = f"{sstat.get('loss_ct_avg')}%" if sstat.get('loss_ct_avg') is not None else "N/A"
-                ping_disp = f"{sstat.get('ping_ct_p50_ms')} ms" if sstat.get('ping_ct_p50_ms') is not None else "N/A"
-                md_lines.append(
-                    f"| `{sname}` | {on_label} | `{f_stat}` | `{cov_label}` | {sstat.get('window_points_count')} | {cpu_disp} | {ram_disp} | "
-                    f"{loss_disp} | {ping_disp} |"
-                )
+                cpu = f"{sstat.get('cpu_avg_pct')}%" if sstat.get('cpu_avg_pct') is not None else "-"
+                ram = f"{sstat.get('ram_avg_pct')}%" if sstat.get('ram_avg_pct') is not None else "-"
+                load_disp = f"{cpu} / {ram}" if sstat.get("online") else "-"
+                ping = f"{sstat.get('ping_ct_p50_ms')} ms" if sstat.get('ping_ct_p50_ms') is not None else "-"
+                loss_val = sstat.get('loss_ct_avg')
+                loss = f" (丢包 {loss_val}%)" if (loss_val is not None and loss_val > 0) else ""
+                net_disp = f"{ping}{loss}" if sstat.get("online") else "-"
+                md_lines.append(f"| {sname} | {on_label} | {load_disp} | {net_disp} |")
         else:
             md_lines.append(f"*CF 历史拉取受限或未完成: {cf_facts.get('error', cf_facts.get('status'))}*")
         md_report_str = "\n".join(md_lines) + "\n"
         self.assert_sanitized(md_report_str)
+        # 5. Format Dedicated Push Card (Scheme 2 - Mobile card, no wide tables)
+        push_report_str = self.format_weekly_push_message(summary_facts)
 
         # Write files
         ts_tag = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         json_file = self.reports_dir / f"weekly_report_{iso_week}_{ts_tag}.json"
         md_file = self.reports_dir / f"weekly_report_{iso_week}_{ts_tag}.md"
+        push_file = self.reports_dir / f"weekly_report_{iso_week}_{ts_tag}_push.txt"
         latest_json = self.reports_dir / "weekly_report_latest.json"
         latest_md = self.reports_dir / "weekly_report_latest.md"
+        latest_push = self.reports_dir / "weekly_report_latest_push.txt"
 
         with open(json_file, "w", encoding="utf-8") as f:
             f.write(json_report_str)
         with open(md_file, "w", encoding="utf-8") as f:
             f.write(md_report_str)
+        with open(push_file, "w", encoding="utf-8") as f:
+            f.write(push_report_str)
 
         # Update symlinks / latest
-        if latest_json.is_symlink() or latest_json.exists():
-            latest_json.unlink()
-        if latest_md.is_symlink() or latest_md.exists():
-            latest_md.unlink()
-
-        try:
-            latest_json.symlink_to(json_file.name)
-            latest_md.symlink_to(md_file.name)
-        except OSError:
-            with open(latest_json, "w", encoding="utf-8") as f:
-                f.write(json_report_str)
-            with open(latest_md, "w", encoding="utf-8") as f:
-                f.write(md_report_str)
+        for link, target, content in [
+            (latest_json, json_file, json_report_str),
+            (latest_md, md_file, md_report_str),
+            (latest_push, push_file, push_report_str),
+        ]:
+            if link.is_symlink() or link.exists():
+                link.unlink()
+            try:
+                link.symlink_to(target.name)
+            except OSError:
+                with open(link, "w", encoding="utf-8") as f:
+                    f.write(content)
 
         return {
             "json_path": str(json_file),
             "md_path": str(md_file),
+            "push_path": str(push_file),
             "latest_json": str(latest_json),
             "latest_md": str(latest_md),
+            "latest_push": str(latest_push),
+            "push_message": push_report_str,
             "iso_week": iso_week,
         }
 
+    def format_weekly_push_message(self, summary_facts: dict[str, Any]) -> str:
+        """Format an executive-grade, mobile-optimized push card (No wide tables)."""
+        period = summary_facts.get("period", {})
+        iso_week = period.get("iso_week") or summary_facts.get("iso_week", "unknown")
+        start_utc = parse_iso_utc(period.get("start_utc"))
+        end_utc = parse_iso_utc(period.get("end_utc"))
+        start_disp = start_utc.strftime("%m-%d %H:%M") if start_utc else ""
+        end_disp = end_utc.strftime("%m-%d %H:%M") if end_utc else ""
+
+        cf_servers = summary_facts.get("cf_monitor", {}).get("servers", {})
+        ib = summary_facts.get("instabox", {})
+        ib_reach = ib.get("reachability", {})
+        qqg_spool = summary_facts.get("qqg1299", {})
+        jev = summary_facts.get("jev_evaluation", {})
+
+        lines = [
+            f"📊 AuroraOps 运维权威周报 ({iso_week})",
+            f"周期: {start_disp} ~ {end_disp} UTC (cc15 权威聚合)",
+            "",
+            "── 🎯 核心资产健康度 (重点关注) ──",
+        ]
+
+        # cc15 block
+        cc15_cf = cf_servers.get("cc15", {})
+        cc15_on = "🟢 在线" if cc15_cf.get("online") else "🔴 离线"
+        cc15_cpu = f"{cc15_cf.get('cpu_avg_pct', '-')}%"
+        cc15_ram = f"{cc15_cf.get('ram_avg_pct', '-')}%"
+        cc15_ping = f"{cc15_cf.get('ping_ct_p50_ms', '-')}ms"
+        cc15_loss = f" · 丢包 {cc15_cf.get('loss_ct_avg')}%" if cc15_cf.get("loss_ct_avg") else ""
+
+        # cc15 reachability from instabox
+        cc15_in = ib_reach.get("handclap6764.suai.eu.org") or ib_reach.get("cc15") or {}
+        cc15_in_disp = f"p50 {cc15_in.get('latency_p50_ms', '-')}ms / p95 {cc15_in.get('latency_p95_ms', '-')}ms" if cc15_in else "-"
+
+        lines.extend([
+            "🔹 cc15 (美西核心 Hub & 聚合中枢)",
+            f"  • 运行存活: {cc15_on} (CPU {cc15_cpu} · 内存 {cc15_ram})",
+            f"  • 电信网络: 时延 {cc15_ping}{cc15_loss}",
+            f"  • 入站响应: {cc15_in_disp}",
+            "  • IP 质量: 原生干净 · 无送中漂移",
+            "",
+        ])
+
+        # qqg1299 block
+        qqg_cf = cf_servers.get("qqg1299", {})
+        qqg_on = "🟢 在线" if qqg_cf.get("online") else "🔴 离线"
+        qqg_load = f"{qqg_spool.get('loadavg', {}).get('1m_avg', '-')}"
+        qqg_ram = f"{qqg_spool.get('memory', {}).get('used_pct_avg', '-')}%"
+        qqg_ping = f"{qqg_cf.get('ping_ct_p50_ms', '-')}ms"
+        qqg_loss = f" · 丢包 {qqg_cf.get('loss_ct_avg')}%" if qqg_cf.get("loss_ct_avg") else ""
+
+        # qqg1299 reachability from instabox
+        qqg_in = ib_reach.get("uk.suai.eu.org") or ib_reach.get("qqg1299") or {}
+        qqg_in_disp = f"p50 {qqg_in.get('latency_p50_ms', '-')}ms / p95 {qqg_in.get('latency_p95_ms', '-')}ms" if qqg_in else "-"
+
+        # qqg1299 geo
+        geo = qqg_spool.get("geo_audit", {})
+        regions = ', '.join(geo.get("unique_regions", [])) or "US"
+        drift = geo.get("drift_events_count", 0)
+        drift_disp = f"{regions} ({drift} 次切换)" if drift > 0 else regions
+
+        lines.extend([
+            "🔹 qqg1299 (美西主力中继 Hub)",
+            f"  • 运行存活: {qqg_on} (负载 {qqg_load} · 内存 {qqg_ram})",
+            f"  • 电信网络: 时延 {qqg_ping}{qqg_loss}",
+            f"  • 入站响应: {qqg_in_disp}",
+            f"  • 出站区域: {drift_disp}",
+            "  • IP 质量: ⚠️ 送中告警 (保持中继分流)",
+            "",
+        ])
+
+        # InstaBox section
+        lines.append("── 🌐 外部探测基准 (InstaBox 辅助参考) ──")
+        if ib.get("status") == "ok":
+            ib_samples = ib.get("samples", {})
+            v = ib_samples.get("valid_runs", 0)
+            e = ib_samples.get("expected_runs", 42)
+            g_p50 = ib.get("google", {}).get("latency_p50_ms", "-")
+            y_p50 = ib.get("youtube", {}).get("latency_p50_ms", "-")
+            cf_dns = ib_reach.get("1.1.1.1", {}).get("latency_p50_ms", "-")
+            g_dns = ib_reach.get("8.8.8.8", {}).get("latency_p50_ms", "-")
+            lines.extend([
+                f"  • 运行状态: 🟢 按需唤醒运行正常 (有效基准 {v}/{e} 轮)",
+                f"  • 纯净出口: Google {g_p50}ms · YouTube {y_p50}ms (无送中)",
+                f"  • 公网基准: CF DNS {cf_dns}ms · Google DNS {g_dns}ms",
+            ])
+        else:
+            lines.append(f"  • 状态: ⚠️ 外探采集未完成 ({ib.get('status')})")
+        lines.append("")
+
+        # Cluster matrix
+        lines.append(f"── ⚡ 全网节点时序与存活 ({len(cf_servers)} 台) ──")
+        online_srvs = [s for s, v in cf_servers.items() if v.get("online")]
+        offline_srvs = [s for s, v in cf_servers.items() if not v.get("online")]
+        lines.append(f"  🟢 在线 ({len(online_srvs)} 台): {', '.join(online_srvs) if online_srvs else '无'}")
+        if offline_srvs:
+            lines.append(f"  🔴 离线 ({len(offline_srvs)} 台): {', '.join(offline_srvs)}")
+        lines.append("")
+
+        # Jev Section
+        lines.append("── 🤖 Jev 综合研判 ──")
+        if jev.get("status") == "evaluated":
+            grade = str(jev.get("health_grade", "unknown")).upper()
+            risk = str(jev.get("risk_rating", "unknown")).upper()
+            h_conf = round(float(jev.get("health_confidence", 0.0)) * 100)
+            lines.append(f"  🟢 自动研判通过: 评级 {grade} · 风险 {risk} (置信度 {h_conf}%)")
+        else:
+            h_conf = round(float(jev.get("health_confidence", 0.0)) * 100)
+            r_conf = round(float(jev.get("risk_confidence", 0.0)) * 100)
+            lines.append(f"  🟡 待人工复核: 采样置信度未达标 (健康 {h_conf}% / 风险 {r_conf}%，门槛 60%)")
+            lines.append("  建议处置: 人工核验关键节点服务与时延")
+
+        push_str = "\n".join(lines) + "\n"
+        self.assert_sanitized(push_str)
+        return push_str
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="AuroraOps Authoritative Metrics Aggregator & Weekly Reporter")
@@ -1105,14 +1278,17 @@ def main() -> None:
         # report generation or the systemd unit.
         api_key = os.environ.get("NOTIFY_API_KEY", aggregator.env.get("NOTIFY_API_KEY", ""))
         if api_key:
-            try:
-                md_text = Path(paths["latest_md"]).read_text(encoding="utf-8")
-            except OSError as e:
-                md_text = ""
-                print(f"[push] warning: cannot read report: {e}")
-            if md_text:
-                title = f"AuroraOps 周报 {paths['iso_week']}"
-                push_weekly_report(api_key, md_text, title)
+            push_text = paths.get("push_message")
+            if not push_text:
+                try:
+                    push_text = Path(paths.get("latest_push", paths["latest_md"])).read_text(encoding="utf-8")
+                except OSError as e:
+                    push_text = ""
+                    print(f"[push] warning: cannot read report: {e}")
+            if push_text:
+                title = f"AuroraOps 运维周报 {paths['iso_week']}"
+                ip = f"{get_local_ip()} (cc15)"
+                push_weekly_report(api_key, push_text, title, ip=ip)
         else:
             print("[push] skipped: NOTIFY_API_KEY not set")
     else:

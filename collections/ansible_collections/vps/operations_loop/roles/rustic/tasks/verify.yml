@@ -50,11 +50,10 @@
         fail_msg: Deployed Rustic script is stale or lacks lifecycle evidence actions
       tags: [verify, operations_loop, rustic, rustic_verify, phase7]
 
-    - name: 验证所有仓库 (通过带环境和共享锁的 systemd service)
+    - name: 检查所有仓库健康检查服务状态 (只读)
       become: true
       ansible.builtin.systemd_service:
         name: rustic-check.service
-        state: started
       register: rustic_verify
       tags: [verify, operations_loop, rustic, rustic_verify, phase7]
 

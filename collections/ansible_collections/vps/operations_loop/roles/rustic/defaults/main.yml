@@ -35,6 +35,9 @@ rustic_backup_source_docker_dir: "{{ backup_source_docker_dir | default('/opt/do
 rustic_backup_cloud_remotes: "{{ backup_cloud_remotes | default(['onedrive', 'gdrive']) }}"
 rustic_backup_cloud_prefix: "{{ backup_cloud_prefix | default('backup') }}"
 rustic_backup_exclude_file: "/etc/rustic/exclude.txt"
+# 国内节点无法直连 Google 时，设置此值为代理地址（如 http://127.0.0.1:10809），
+# 会部署 /usr/local/bin/rclone wrapper 强制注入代理环境变量。留空则跳过。
+rustic_rclone_proxy: ""
 rustic_cloud_backup_enabled: true
 
 rustic_backup_src_paths: "{{ backup_src_paths | default([]) }}"

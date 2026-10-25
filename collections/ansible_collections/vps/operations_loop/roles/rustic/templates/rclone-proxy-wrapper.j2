@@ -1,0 +1,17 @@
+#!/bin/sh
+# Ansible-managed rclone wrapper: forces outbound proxy for hosts that
+# cannot reach Google directly (e.g. mainland VPS). The real rclone binary
+# at /usr/bin/rclone is invoked with proxy env vars injected, so any
+# subprocess (including rustic spawning `rclone serve restic`) always goes
+# through the proxy instead of hanging on a direct SYN.
+set -u
+
+export HTTP_PROXY="{{ rustic_rclone_proxy }}"
+export HTTPS_PROXY="{{ rustic_rclone_proxy }}"
+export http_proxy="{{ rustic_rclone_proxy }}"
+export https_proxy="{{ rustic_rclone_proxy }}"
+export RCLONE_HTTP_PROXY="{{ rustic_rclone_proxy }}"
+export NO_PROXY="localhost,127.0.0.1,::1,10.144.10.0/24"
+export no_proxy="localhost,127.0.0.1,::1,10.144.10.0/24"
+
+exec /usr/bin/rclone "$@"

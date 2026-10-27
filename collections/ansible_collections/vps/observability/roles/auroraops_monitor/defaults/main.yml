@@ -26,6 +26,10 @@ auroraops_monitor_geo_audit_log: "/var/log/geo_audit/geo_audit.log"
 auroraops_monitor_roll_interval_seconds: 900
 
 
+# CF collector first-run delay after boot. Raised to 10min to keep the
+# aggregator's periodic collector out of the boot I/O window (cc15 incident).
+auroraops_monitor_cf_collector_on_boot_sec: "10min"
+
 # Cloudflare Server Monitor configuration
 cf_probe_worker_url: "https://cf-server-monitor.suainam.workers.dev"
 # Controller timer configuration (Darwin Controller LaunchAgent)

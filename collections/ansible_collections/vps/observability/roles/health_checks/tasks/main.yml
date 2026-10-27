@@ -232,7 +232,12 @@
     app_service_group: root
     app_service_working_directory: /var/lib/health_checks
     app_service_environment_file: /etc/health_checks/health_checks.env
-    app_service_enabled: true
+    app_service_enabled: false
+    app_service_nice: 19
+    app_service_cpu_weight: 20
+    app_service_io_weight: 20
+    app_service_ioscheduling_class: best-effort
+    app_service_ioscheduling_priority: 7
     app_service_state: stopped
   when: auroraops_roles['observability']['health_checks'] | default(true) | bool
   tags:
@@ -249,6 +254,7 @@
     app_timer_description: Timer for Health Check Runner
     app_timer_on_calendar: "*-*-* {{ health_checks_schedule_hours }}"
     app_timer_persistent: true
+    app_timer_randomized_delay: 15m
   when: auroraops_roles['observability']['health_checks'] | default(true) | bool
   tags:
     - deploy

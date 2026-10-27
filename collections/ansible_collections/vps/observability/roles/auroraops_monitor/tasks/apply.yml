@@ -547,7 +547,7 @@
       Description=AuroraOps Cloudflare Server Monitor Collector Timer (4h)
 
       [Timer]
-      OnBootSec=2min
+      OnBootSec={{ auroraops_monitor_cf_collector_on_boot_sec }}
       OnUnitActiveSec=4h
       AccuracySec=1min
 

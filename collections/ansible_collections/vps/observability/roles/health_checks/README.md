@@ -38,6 +38,7 @@
 | `health_checks_heartbeat_interval` | `360` | 心跳报告发送间隔 (分钟) |
 | `health_checks_alert_window_hours` | `8-12,14-18` | 告警/推送的有效时间窗口 |
 | `health_checks_queue_on_calendar` | `08..11,14..17:00:00` | 队列重试的调度点 (仅在窗口期内) |
+| `health_checks_runner_randomized_delay` | `15m` | `health_check_runner.timer` 的随机延迟窗口，错峰避开整点与系统引导峰值。 |
 | `health_checks_cpu_warning_threshold` | `90` | CPU 利用率警告阈值 |
 | `health_checks_cpu_critical_threshold` | `95` | CPU 利用率严重阈值 |
 | `health_checks_io_await_warning_threshold` | `150`| 磁盘 IO Await 延迟警告 (ms) |

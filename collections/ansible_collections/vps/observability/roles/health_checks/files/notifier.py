@@ -548,7 +548,12 @@ def aggregate_and_push(items: list, notify1_api_key: str, notify2_api_key: str):
     now = time.localtime()
     total_minutes = now.tm_hour * 60 + now.tm_min
     heartbeat_interval = int(os.environ.get("HEARTBEAT_INTERVAL_MINUTES", "60"))
-    is_heartbeat_time = (0 <= (total_minutes % heartbeat_interval) <= 10) if heartbeat_interval > 0 else False
+    # cc15 boot-hardening adds RandomizedDelaySec=15m to health_check_runner.timer,
+    # so runs land up to +15min past the nominal :05 slot. The heartbeat gate must
+    # cover that spread (offset 5..20 in each interval), else the randomized delay
+    # silently suppresses the heartbeat (observed 2026-10-28: 06:11 run at offset
+    # 11 > 10 was skipped). Window 0..20 covers the full 5+15=20 offset.
+    is_heartbeat_time = (0 <= (total_minutes % heartbeat_interval) <= 20) if heartbeat_interval > 0 else False
 
     thresholds_env = os.environ.get("THRESHOLDS_JSON", '{"usage_percent":90}')
     try:

@@ -1,0 +1,44 @@
+---
+# Tasks to safely retire legacy Instabox pullers and prevent re-enabling them
+- name: Stop and disable legacy Instabox puller timer instances
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  failed_when: false
+  loop:
+    - auroraops_instabox_puller@instabox.timer
+    - auroraops_instabox_puller@instabox-suai.timer
+    - auroraops_instabox_puller@instabox.service
+    - auroraops_instabox_puller@instabox-suai.service
+    - auroraops_instabox_puller.timer
+    - auroraops_instabox_puller.service
+  when: not ansible_check_mode
+  tags: [deploy, check, observability, auroraops_monitor]
+
+- name: Mask legacy Instabox puller timer instances
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    masked: true
+  failed_when: false
+  loop:
+    - auroraops_instabox_puller@instabox.timer
+    - auroraops_instabox_puller@instabox-suai.timer
+    - auroraops_instabox_puller@instabox.service
+    - auroraops_instabox_puller@instabox-suai.service
+  when: not ansible_check_mode
+  tags: [deploy, check, observability, auroraops_monitor]
+
+- name: Remove legacy Instabox puller unit definitions
+  become: true
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ item }}"
+    state: absent
+  loop:
+    - auroraops_instabox_puller@.timer
+    - auroraops_instabox_puller@.service
+    - auroraops_instabox_puller.timer
+    - auroraops_instabox_puller.service
+  tags: [deploy, check, observability, auroraops_monitor]

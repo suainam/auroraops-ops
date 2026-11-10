@@ -37,3 +37,8 @@ controller_timer_name: "{{ 'com.auroraops.instabox-scheduler' if auroraops_monit
 controller_timer_description: "{{ 'Instabox 4-Hour Outer Probe Scheduler' if auroraops_monitor_mode == 'outer_probe' else ('AuroraOps cc15 Spool Pusher' if auroraops_monitor_mode == 'aggregator' else 'AuroraOps qqg1299 Bounded Spool Durable Puller') }}"
 controller_timer_script: "{{ 'instabox_scheduler_tick.sh' if auroraops_monitor_mode == 'outer_probe' else ('cc15_spool_pusher.py' if auroraops_monitor_mode == 'aggregator' else 'qqg1299_spool_puller.sh') }}"
 controller_timer_interval: "{{ 14400 if auroraops_monitor_mode == 'outer_probe' else 300 }}"
+
+# OpenViking 3-Node rotation orchestrator (cc15 aggregator host)
+auroraops_monitor_openviking_rotation_script: "{{ auroraops_monitor_dir }}/openviking_rotation.py"
+auroraops_monitor_openviking_rotation_service: openviking-rotation.service
+auroraops_monitor_openviking_rotation_timer: openviking-rotation.timer

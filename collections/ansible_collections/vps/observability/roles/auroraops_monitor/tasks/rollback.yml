@@ -6,6 +6,19 @@
   ansible.builtin.include_tasks: controller_scheduler_rollback.yml
   tags: [rollback, observability, auroraops_monitor]
 
+- name: 停止并禁用 openviking-rotation systemd timer 与 service (Aggregator)
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop:
+    - openviking-rotation.timer
+    - openviking-rotation.service
+  failed_when: false
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [rollback, observability, auroraops_monitor]
+
 - name: 停止并禁用 weekly report systemd timer 与 service (Aggregator)
   become: true
   ansible.builtin.systemd:
@@ -18,6 +31,18 @@
     - auroraops_cf_collector.timer
     - auroraops_cf_collector.service
   failed_when: false
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [rollback, observability, auroraops_monitor]
+
+- name: 移除 openviking-rotation systemd unit 与脚本 (Aggregator)
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/openviking-rotation.timer
+    - /etc/systemd/system/openviking-rotation.service
+    - "{{ auroraops_monitor_openviking_rotation_script }}"
   when: auroraops_monitor_mode == 'aggregator'
   tags: [rollback, observability, auroraops_monitor]
 

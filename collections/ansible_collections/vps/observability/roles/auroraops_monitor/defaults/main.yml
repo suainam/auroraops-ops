@@ -42,3 +42,8 @@ controller_timer_interval: "{{ 14400 if auroraops_monitor_mode == 'outer_probe' 
 auroraops_monitor_openviking_rotation_script: "{{ auroraops_monitor_dir }}/openviking_rotation.py"
 auroraops_monitor_openviking_rotation_service: openviking-rotation.service
 auroraops_monitor_openviking_rotation_timer: openviking-rotation.timer
+
+# agy 账号活跃心跳 (cc15 aggregator host)
+auroraops_monitor_agy_heartbeat_script: "{{ auroraops_monitor_dir }}/agy_heartbeat.py"
+auroraops_monitor_agy_heartbeat_service: agy-heartbeat.service
+auroraops_monitor_agy_heartbeat_timer: agy-heartbeat.timer

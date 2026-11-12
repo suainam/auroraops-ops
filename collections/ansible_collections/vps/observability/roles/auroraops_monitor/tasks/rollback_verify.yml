@@ -125,6 +125,27 @@
   when: auroraops_monitor_mode == 'aggregator'
   tags: [rollback_verify, observability, auroraops_monitor]
 
+- name: 验证 agy-heartbeat systemd unit 文件与脚本已清理 (Aggregator)
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: auroraops_monitor_agy_hb_rb_stats
+  loop:
+    - /etc/systemd/system/agy-heartbeat.timer
+    - /etc/systemd/system/agy-heartbeat.service
+    - "{{ auroraops_monitor_agy_heartbeat_script }}"
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [rollback_verify, observability, auroraops_monitor]
+
+- name: 断言 agy-heartbeat systemd unit 文件完全不存在 (Aggregator)
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists
+    fail_msg: "回滚失败: {{ item.item }} 仍然残留"
+  loop: "{{ auroraops_monitor_agy_hb_rb_stats.results | default([]) }}"
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [rollback_verify, observability, auroraops_monitor]
+
 - name: 验证 weekly report systemd timer 已完全停用 (Aggregator)
   ansible.builtin.command:
     cmd: systemctl is-active auroraops_weekly_report.timer

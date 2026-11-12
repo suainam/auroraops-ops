@@ -46,6 +46,31 @@
   when: auroraops_monitor_mode == 'aggregator'
   tags: [rollback, observability, auroraops_monitor]
 
+- name: 停止并禁用 agy-heartbeat systemd timer 与 service (Aggregator)
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop:
+    - agy-heartbeat.timer
+    - agy-heartbeat.service
+  failed_when: false
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [rollback, observability, auroraops_monitor]
+
+- name: 移除 agy-heartbeat systemd unit 与脚本 (Aggregator)
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/agy-heartbeat.timer
+    - /etc/systemd/system/agy-heartbeat.service
+    - "{{ auroraops_monitor_agy_heartbeat_script }}"
+  when: auroraops_monitor_mode == 'aggregator'
+  tags: [rollback, observability, auroraops_monitor]
+
 - name: 移除 weekly report systemd unit 与环境配置文件 (Aggregator)
   become: true
   ansible.builtin.file:

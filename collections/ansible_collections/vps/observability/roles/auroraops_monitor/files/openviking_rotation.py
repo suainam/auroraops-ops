@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """OpenViking 3-Node Daily Rotation & Lifecycle Orchestrator.
 
-Manages the daily 08:30-23:00 (Asia/Shanghai) sequential rotation across
+Manages the daily 08:30-23:58 (Asia/Shanghai) sequential rotation across
 three InstaBox nodes:
   - Node 1: instabox-suai   (10.144.10.16) [08:30 - 13:55] (~5.4h)
   - Node 2: instabox        (10.144.10.15) [13:55 - 19:20] (~5.4h)
-  - Node 3: instabox-suaily (10.144.10.17) [19:20 - 23:00] (~3.7h)
+  - Node 3: instabox-suaily (10.144.10.17) [19:20 - 23:58] (~4.6h)
 
 Guarantees:
 1. Strict Single-Writer: At any time, exactly one node is designated in cc15's ovcli.conf.
@@ -57,7 +57,7 @@ NODES: dict[str, NodeConfig] = {
         "ip": "10.144.10.17",
         "port": 30012,
         "duty_start": dt_time(19, 20),
-        "duty_end": dt_time(23, 0),
+        "duty_end": dt_time(23, 58),
     },
 }
 
@@ -83,7 +83,7 @@ def determine_current_duty_node(now: datetime | None = None) -> tuple[str | None
         if info["duty_start"] <= cur_t < info["duty_end"]:
             return node_name, f"On duty ({info['duty_start'].strftime('%H:%M')} - {info['duty_end'].strftime('%H:%M')})"
 
-    return None, "Off duty (Night window 23:00 - 08:30, all nodes idle)"
+    return None, "Off duty (Night window 23:58 - 08:30, all nodes idle)"
 
 
 def run_cmd(cmd: list[str], timeout: float = 30.0) -> tuple[int, str, str]:
@@ -565,7 +565,7 @@ def main() -> None:
         duty_node, duty_msg = determine_current_duty_node(now)
         print("=== OpenViking 3-Node Rotation Plan ===")
         print(f"Current Shanghai Time: {now.strftime('%Y-%m-%d %H:%M:%S')}")
-        print("Active Duty Window: 08:30 - 23:00 (14.5 hours)")
+        print("Active Duty Window: 08:30 - 23:58 (15.5 hours)")
         print(f"Current Duty Status: {duty_msg}")
         print(f"Current Designated Node: {duty_node or 'None (Night Idle)'}\n")
         print("Schedule:")
